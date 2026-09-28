@@ -460,10 +460,10 @@ function App(): React.ReactElement {
     // Load accounts and messages for first identity with account
     const firstIdentity = identities[0];
     if (firstIdentity) {
-      const account = database.getEmailAccountByIdentityId(firstIdentity.id);
-      if (account) {
-        setAccounts([account]);
-        setMessages(database.getMessagesByAccount(account.id, 20));
+      const account = database.getEmailAccountsByIdentity(firstIdentity.id);
+      if (account && account.length > 0) {
+        setAccounts(account);
+        setMessages(database.getMessagesByAccount(account[0].id));
       }
     }
   }
@@ -501,10 +501,6 @@ function App(): React.ReactElement {
       browser: newProfile.browser,
       directory: dir,
       identity_id: null,
-      status: 'inactive',
-      last_launched_at: null,
-      last_closed_at: null,
-      notes: newProfile.notes || null,
     });
     setShowCreateProfile(false);
     setNewProfile({ name: '', browser: 'chromium', notes: '' });
@@ -2475,9 +2471,9 @@ function App(): React.ReactElement {
                         <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.35)' }}>
                           Created: {formatDate(profile.created_at)}
                         </div>
-                        {profile.last_launched_at && (
+                        {profile.last_used_at && (
                           <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.35)', marginTop: '4px' }}>
-                            Last launched: {formatDate(profile.last_launched_at)}
+                            Last used: {formatDate(profile.last_used_at)}
                           </div>
                         )}
                         {profile.notes && (

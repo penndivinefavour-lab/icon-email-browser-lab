@@ -1,151 +1,170 @@
 # ICON Email & Browser Lab — Project Status
 
-**Updated**: September 26, 2026
+**Updated**: September 28, 2026
 
 ---
 
-## Current Phase: Phase 1 — Foundation Complete / Phase 2 — Core Data Model Complete
+## Current Phase: Phase 3/4 — Browser Compatibility + Mock Email E2E
 
-The project has completed Phase 1 (foundation) and Phase 2 (core data model). The database layer, all domain packages, the full UI dashboard, and the integration test suite are built and passing.
-
----
-
-## What Was Built
-
-### Database (packages/database)
-
-- 10 migrations covering all core entities
-- Full CRUD for identities, email accounts, messages, verification codes, browser profiles, sessions, test runs, activity logs, settings
-- Search and filter for identities
-- SQLite via sql.js (no native build required)
-
-### Email (packages/email)
-
-- EmailProvider abstract class with IMAP/Gmail/Outlook/Mock implementations
-- MockEmailProvider fully functional with addMessage/clearMessages
-- OTPParser with configurable patterns for 123456, 123 456, 123-456, and context patterns
-- Service label and expiration extraction
-
-### Browser (packages/browser)
-
-- BrowserProfileManager wrapping Playwright
-- Profile create/get/update/delete
-- Launch/close sessions with isolated BrowserContext
-- Navigate and screenshot helpers
-
-### Automation (packages/automation)
-
-- TestRunner with 5 built-in test cases:
-  - login-flow
-  - email-verification
-  - otp-extraction
-  - profile-isolation
-  - session-lifecycle
-- Log streaming, timeout, cancellation support
-
-### Shared (packages/shared)
-
-- ActivityLogger with structured event methods
-- CSV import/export for identities
-- generateTestIdentities for QA
-
-### UI (apps/web)
-
-- Full React dashboard with 9 modules:
-  - Dashboard (stats cards, recent identities, recent activity, test runs, system health)
-  - Identity Manager (create, search, filter, sort, copy, delete, export CSV)
-  - Inbox Manager (message list + detail view, mark read)
-  - OTP / Verification Center (code display with service/labels)
-  - Browser Profiles (create, launch/stop, card view)
-  - Sessions (list with status/duration)
-  - Automation / QA (test run list)
-  - Activity Logs (filtered audit trail)
-  - Settings (configuration overview)
-- ICON Studios dark premium theme
-- Poppins typography
-- Responsive grid layout
-
-### Documentation
-
-- README.md
-- ARCHITECTURE.md
-- DEVELOPMENT.md
-- SECURITY.md
-- ROADMAP.md
-
-### Configuration
-
-- .env.example (git-ignored .env template)
-- .gitignore
-- package.json with all scripts
-- tsconfig.json
-- vite.config.ts
-- vitest.config.ts
+The project has completed:
+- ✅ Phase 1: Foundation (database, email, browser, automation packages)
+- ✅ Phase 2: Core Data Model (CRUD operations, seed data)
+- ✅ Phase 3a: Database browser compatibility refactor (sql.js WASM, cross-platform I/O)
+- ✅ Phase 4: Mock Email E2E verification (full OTP flow working)
+- ⚠️ Phase 3b: Vite dev server UI rendering (path alias resolution issue)
 
 ---
 
-## What's Verified
+## What's Verified ✅
 
-- `npm install` completes successfully
-- Database initializes and runs migrations
-- Seed script populates demo data
-- All 30+ integration tests pass:
-  - Identity CRUD
-  - Identity filtering
-  - Identity search
-  - CSV import/export
-  - Email accounts
-  - Messages
-  - Verification codes
-  - Browser profiles
-  - Sessions
-  - Test runs
-  - Activity logs
-  - Settings
+### TypeScript Compilation
+- **0 errors** (`npx tsc --noEmit`)
+- All packages compile cleanly
+
+### Unit Tests
+- **34/34 tests pass** (`npx tsx --test packages/database/src/index.test.ts`)
+- Duration: ~1200ms
+
+### Mock Email E2E Flow
+- ✅ Database initialization
+- ✅ Identity creation
+- ✅ Email account creation (mock provider)
+- ✅ Mock email reception with OTP
+- ✅ OTP extraction (regex pattern matching)
+- ✅ Verification code storage
+- ✅ Code status updates (pending → used)
+- ✅ Message retrieval by identity
+- **Result: PASS**
+
+### Database Layer
+- Cross-platform support (Node.js + browser)
+- sql.js WASM loading works in both environments
+- No native build dependencies
+- 10 migration tables created
+- Seed data: 5 identities, 5 email accounts, 3 browser profiles, 2 sessions, 2 test runs, 10 activity logs, verification codes
 
 ---
 
-## Remaining Work
+## Known Issues ⚠️
 
-### Immediate (Phase 3-5)
+### Vite Dev Server Path Alias Resolution
+**Status**: BLOCKED
 
-1. Settings UI — interactive configuration
-2. CSV import modal with file upload
-3. Identity detail/edit view
-4. Local test website for QA
-5. Playwright browser integration from UI
-6. Real E2E tests with Playwright
+The Vite dev server fails to resolve `@shared/*` imports from `apps/web/src/App.tsx`.
 
-### Later (Phase 6-8)
+**Error**: `Failed to resolve import "@shared/index" from "apps/web/src/App.tsx". Does the file exist?`
 
-1. IMAP provider implementation
-2. Gmail OAuth2 provider
-3. Tauri desktop wrapper
-4. Advanced bulk operations
-5. Theme toggle
-6. Report export
-7. GitHub release
+**Root cause**: The `vite-tsconfig-paths` plugin is not properly resolving the path aliases configured in `tsconfig.json`. Manual alias configuration in `vite.config.ts` also fails due to path resolution differences between Windows long paths and Vite's internal resolution.
+
+**Workaround options**:
+1. Use relative imports in App.tsx instead of path aliases
+2. Switch to a different module bundler configuration
+3. Build a simple HTTP server to serve pre-built assets
+4. Use Vite's `optimizeDeps` configuration to pre-bundle the packages
+
+---
+
+## Files Changed (Current Working Tree)
+
+| File | Status | Description |
+|------|--------|-------------|
+| `apps/web/src/App.tsx` | Modified | API call fixes (filterIdentities, getEmailAccountsByIdentity) |
+| `packages/database/src/index.ts` | Modified | Browser compatibility refactor (1144 lines) |
+| `packages/database/src/index.test.ts` | Modified | Test rewrite for new API (34 tests) |
+| `vite.config.ts` | Modified | Added resolve aliases (not working yet) |
+| `scripts/e2e_mock_email.ts` | New | Mock email E2E test script |
+| `scripts/e2e_verify.ts` | New | Vite UI verification script |
+| `start_vite.py` | New | Python script to manage Vite dev server |
+| `QUICKSTART.md` | New | Quick start guide |
+
+---
+
+## Git Status
+
+```
+Modified: apps/web/src/App.tsx
+Modified: packages/database/src/index.test.ts
+Modified: packages/database/src/index.ts
+Modified: vite.config.ts
+Untracked: scripts/e2e_mock_email.ts
+Untracked: scripts/e2e_verify.ts
+Untracked: start_vite.py
+Untracked: QUICKSTART.md
+```
+
+Previous commit: `8e804cc` - "feat: complete Phase 1-2 foundation"
+
+---
+
+## Architecture Summary
+
+### Package Structure
+```
+packages/
+  database/src/index.ts    # sql.js abstraction, cross-platform
+  email/src/index.ts       # EmailProvider abstraction
+  email/src/otp-parser.ts  # OTP extraction
+  browser/src/index.ts     # Playwright BrowserProfileManager
+  automation/src/index.ts  # TestRunner/QA automation
+  shared/src/              # ActivityLogger, CSV tools, types
+
+apps/
+  web/src/App.tsx          # React dashboard (3134 lines)
+  web/src/main.tsx         # React bootstrap
+  web/index.html           # Entry point
+```
+
+### Key Design Decisions
+- **Database**: sql.js (WASM) instead of better-sqlite3 (no C++ build needed)
+- **Tests**: Node.js built-in `node:test` + tsx runner (vitest had resolution issues)
+- **Browser compatibility**: `isBrowser()` checks, `fetchBinary()` for WASM/DB loading
+- **Path aliases**: `@shared/*`, `@database/*`, etc. defined in tsconfig.json
+
+---
+
+## Next Steps
+
+### Option A: Fix Vite Path Aliases (Recommended)
+1. Investigate `vite-tsconfig-paths` plugin behavior on Windows
+2. Consider using relative imports in App.tsx to bypass alias issue
+3. Alternative: Create a Vite plugin to handle path resolution
+
+### Option B: Build Pre-packaged Assets
+1. Use `tsc` to compile packages to `dist/`
+2. Configure Vite to use compiled JS files
+3. Serve via simple HTTP server or Netlify
+
+### Option C: Desktop Wrapper
+1. Wrap existing code in Tauri or Electron
+2. Avoid browser bundling issues entirely
+3. Leverage Node.js capabilities directly
 
 ---
 
 ## Blockers
 
-None. The foundation is healthy and all tests pass.
+1. **Vite path alias resolution** — blocks UI testing and visualization
+2. **Playwright browser integration** — not yet connected to UI
 
 ---
 
-## Next Recommended Phase
+## Recommended Immediate Actions
 
-**Phase 3: UI Completion + Phase 5: Browser Laboratory**
+1. Fix the Vite path alias issue (Option A above)
+2. Run the E2E verification script against a working dev server
+3. Commit all changes and push to GitHub
+4. Consider Tauri wrapper for desktop deployment
 
-Recommended sequence:
+---
 
-1. Add interactive Settings UI (forms for provider config, browser settings, automation settings)
-2. Add CSV import modal with file upload and preview
-3. Build a simple local test website (login + verification flow)
-4. Integrate Playwright browser launching from the Profiles UI
-5. Wire test run execution from the Automation UI
-6. Install Playwright browsers
-7. Run full E2E smoke test
+## Test Results Summary
 
-This delivers a fully interactive application with real browser automation capability.
+| Metric | Value |
+|--------|-------|
+| TypeScript errors | 0 |
+| Unit tests passed | 34/34 |
+| E2E mock email flow | PASS |
+| Vite dev server | BLOCKED (path alias issue) |
+| Database migrations | ✅ Working |
+| Seed script | ✅ Working |
+| Git commits | 1 (phase 1-2), pending (phase 3-4) |

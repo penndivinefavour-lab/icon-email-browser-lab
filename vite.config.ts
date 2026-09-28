@@ -1,7 +1,21 @@
 import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import { resolve } from 'path';
+
+const ROOT = resolve(__dirname);
 
 export default defineConfig({
   root: 'apps/web',
+  plugins: [react()],
+  resolve: {
+    alias: {
+      '@shared': resolve(ROOT, 'packages/shared/src'),
+      '@database': resolve(ROOT, 'packages/database/src'),
+      '@email': resolve(ROOT, 'packages/email/src'),
+      '@browser': resolve(ROOT, 'packages/browser/src'),
+      '@automation': resolve(ROOT, 'packages/automation/src'),
+    },
+  },
   build: {
     outDir: '../../dist/web',
     sourcemap: true,
@@ -9,8 +23,5 @@ export default defineConfig({
   server: {
     port: 3000,
     strictPort: true,
-  },
-  esbuild: {
-    target: 'es2022',
   },
 });

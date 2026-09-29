@@ -168,6 +168,28 @@ runner.registerTestCase({
 });
 ```
 
+### Adding a New Browser Isolation Test (Phase 5+)
+
+Browser isolation tests use Playwright's `launchPersistentContext` for true profile isolation:
+
+```typescript
+// In tests/browser-isolation.spec.ts or scripts/run_phase5_tests.ts
+import { chromium } from '@playwright/test';
+
+const { context, page } = await chromium.launchPersistentContext(profileDir, {
+  headless: true,
+  viewport: { width: 1280, height: 720 },
+});
+// ... set state in profile A ...
+await context.close();
+// Reopen same profile — state persists
+const { context: ctx2, page: page2 } = await chromium.launchPersistentContext(profileDir, {
+  headless: true,
+  viewport: { width: 1280, height: 720 },
+});
+const value = await page2.evaluate(() => localStorage.getItem('key'));
+```
+
 ### Adding a New Database Entity
 
 1. Add migration SQL in `packages/database/src/index.ts` inside `runMigrations()`
@@ -186,7 +208,7 @@ runner.registerTestCase({
 | UI Framework | React 19 | Component model, ecosystem |
 | Build Tool | Vite 6 | Fast dev server, simple config |
 | Database | sql.js 1.11 | SQLite without native builds (no MSBuild required) |
-| Browser Automation | Playwright 1.62 | Multi-browser, isolated contexts |
+| Browser Automation | Playwright 1.63 | Multi-browser persistent contexts for profile isolation |
 | Testing | Vitest 2 | Fast, Vite-native, good TypeScript support |
 | ID Generation | crypto.randomUUID() | Native, no dependency |
 | Environment | dotenv convention | `.env` / `.env.example` pattern |

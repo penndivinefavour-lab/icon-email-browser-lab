@@ -2,7 +2,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { resolve } from 'path';
 
-const ROOT = resolve(__dirname);
+const ROOT = 'D:/HERMES AGENT/ICON Email Browser Lab';
 
 export default defineConfig({
   root: 'apps/web',

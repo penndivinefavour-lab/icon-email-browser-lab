@@ -372,10 +372,10 @@ function StatCard({
 
 // ─── Table Row ───
 function TableRow({
-  cells,
+  children,
   isLast,
 }: {
-  cells: React.ReactNode[];
+  children: React.ReactNode;
   isLast?: boolean;
 }) {
   return (
@@ -393,7 +393,7 @@ function TableRow({
         transition: 'background 0.15s ease',
       }}
     >
-      {cells}
+      {children}
     </div>
   );
 }
@@ -445,25 +445,28 @@ function App(): React.ReactElement {
   }, []);
 
   function loadData(database: ReturnType<typeof getDatabase>) {
-    setIdentities(database.getAllIdentities());
+    // Use the freshly queried list — reading the `identities` state here would be stale
+    // on first load (still [] during mount) and silently skip messages/OTP data.
+    const freshIdentities = database.getAllIdentities();
+    setIdentities(freshIdentities);
     setProfiles(database.getAllBrowserProfiles());
     setSessions(database.getActiveSessions());
     setActivityLogs(database.getRecentActivityLogs(50));
     setTestRuns(database.getAllTestRuns());
 
     const allCodes: VerificationCode[] = [];
-    for (const id of identities) {
+    for (const id of freshIdentities) {
       allCodes.push(...database.getVerificationCodesByIdentity(id.id));
     }
     setVerificationCodes(allCodes);
 
-    // Load accounts and messages for first identity with account
-    const firstIdentity = identities[0];
-    if (firstIdentity) {
-      const account = database.getEmailAccountsByIdentity(firstIdentity.id);
+    // Load accounts and messages for the first identity that has an account
+    for (const id of freshIdentities) {
+      const account = database.getEmailAccountsByIdentity(id.id);
       if (account && account.length > 0) {
         setAccounts(account);
         setMessages(database.getMessagesByAccount(account[0].id));
+        break;
       }
     }
   }
@@ -685,7 +688,7 @@ function App(): React.ReactElement {
               color: 'rgba(255,255,255,0.4)',
             }}
           >
-            {db ? `DB: ${process.env.DATABASE_PATH?.split('/').pop() || 'icon-lab.db'}` : '—'}
+            {db ? `DB: ${typeof process !== 'undefined' && process.env?.DATABASE_PATH ? process.env.DATABASE_PATH.split('/').pop() : 'icon-lab.db'}` : '—'}
           </span>
         </div>
       </header>
@@ -1421,11 +1424,11 @@ function App(): React.ReactElement {
                   </div>
                 ) : (
                   searchedIdentities.map((identity, index) => (
-                    <TableRow key={identity.id} cells={[
-                      <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.3)', fontWeight: 500 }}>
+                    <TableRow key={identity.id}>
+                      <div key={identity.id + '-idx'} style={{ fontSize: '12px', color: 'rgba(255,255,255,0.3)', fontWeight: 500 }}>
                         {index + 1}
-                      </div>,
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      </div>
+                      <div key={identity.id + '-email'} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <div
                           style={{
                             width: '24px',
@@ -1478,6 +1481,7 @@ function App(): React.ReactElement {
                         {identity.display_name || '—'}
                       </div>,
                       <div
+                        key={identity.id + '-provider'}
                         style={{
                           fontSize: '12px',
                           color: 'rgba(255,255,255,0.5)',
@@ -1486,6 +1490,7 @@ function App(): React.ReactElement {
                         {identity.provider}
                       </div>,
                       <div
+                        key={identity.id + '-source'}
                         style={{
                           fontSize: '12px',
                           color: 'rgba(255,255,255,0.4)',
@@ -1494,10 +1499,10 @@ function App(): React.ReactElement {
                       >
                         {identity.source}
                       </div>,
-                      <div style={{ display: 'flex', alignItems: 'center' }}>
+                      <div key={identity.id + '-status'} style={{ display: 'flex', alignItems: 'center' }}>
                         {statusBadge(identity.status)}
                       </div>,
-                      <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                      <div key={identity.id + '-actions'} style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                         <button
                           onClick={() => copyEmail(identity.email)}
                           title="Copy email"
@@ -1553,7 +1558,7 @@ function App(): React.ReactElement {
                           <IconTrash className="w-3 h-3" />
                         </button>
                       </div>
-                    ]} />
+                    </TableRow>
                   ))
                 )}
               </div>
@@ -2277,10 +2282,8 @@ function App(): React.ReactElement {
 
                   {/* Rows */}
                   {verificationCodes.map((vc) => (
-                    <TableRow
-                      key={vc.id}
-                      cells={[
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <TableRow key={vc.id}>
+                        <div key={vc.id + '-code'} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                           <div
                             style={{
                               width: '36px',
@@ -2301,36 +2304,22 @@ function App(): React.ReactElement {
                             {vc.code}
                           </div>
                         </div>,
-                        <div
-                          style={{
-                            fontSize: '13px',
-                            color: 'rgba(255,255,255,0.7)',
-                          }}
-                        >
+                        <div key={vc.id + '-service'} style={{ fontSize: '13px', color: 'rgba(255,255,255,0.7)' }}>
                           {vc.service_label || '—'}
                         </div>,
-                        <div
-                          style={{
-                            fontSize: '12px',
-                            color: 'rgba(255,255,255,0.4)',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
-                          }}
-                        >
+                        <div key={vc.id + '-sender'} style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {vc.sender}
                         </div>,
-                        <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)' }}>
+                        <div key={vc.id + '-received'} style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)' }}>
                           {formatDate(vc.received_at)}
                         </div>,
-                        <div style={{ fontSize: '12px', color: vc.expires_at ? 'rgba(249, 115, 22, 0.7)' : 'rgba(255,255,255,0.2)' }}>
+                        <div key={vc.id + '-expires'} style={{ fontSize: '12px', color: vc.expires_at ? 'rgba(249, 115, 22, 0.7)' : 'rgba(255,255,255,0.2)' }}>
                           {vc.expires_at ? formatDate(vc.expires_at) : '—'}
                         </div>,
-                        <div style={{ display: 'flex', alignItems: 'center' }}>
+                        <div key={vc.id + '-status'} style={{ display: 'flex', alignItems: 'center' }}>
                           {statusBadge(vc.status)}
-                        </div>,
-                      ]}
-                    />
+                        </div>
+                    </TableRow>
                   ))}
                 </div>
               )}
@@ -2752,10 +2741,8 @@ function App(): React.ReactElement {
                     <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)', fontWeight: 500 }}>Test Run</div>
                   </div>
                   {sessions.map((session) => (
-                    <TableRow
-                      key={session.id}
-                      cells={[
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <TableRow key={session.id}>
+                        <div key={session.id + '-name'} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                           <div
                             style={{
                               width: '8px',
@@ -2768,16 +2755,15 @@ function App(): React.ReactElement {
                             {session.id.slice(0, 8)}...
                           </div>
                         </div>,
-                        <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)' }}>{formatDate(session.started_at)}</div>,
-                        <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)' }}>
+                        <div key={session.id + '-started'} style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)' }}>{formatDate(session.started_at)}</div>,
+                        <div key={session.id + '-duration'} style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)' }}>
                           {formatDuration(session.duration_ms)}
                         </div>,
-                        <div style={{ display: 'flex', alignItems: 'center' }}>{statusBadge(session.status)}</div>,
-                        <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.35)' }}>
+                        <div key={session.id + '-status'} style={{ display: 'flex', alignItems: 'center' }}>{statusBadge(session.status)}</div>,
+                        <div key={session.id + '-testrun'} style={{ fontSize: '12px', color: 'rgba(255,255,255,0.35)' }}>
                           {session.test_run_id ? session.test_run_id.slice(0, 8) + '...' : '—'}
-                        </div>,
-                      ]}
-                    />
+                        </div>
+                    </TableRow>
                   ))}
                 </div>
               )}
@@ -2839,10 +2825,8 @@ function App(): React.ReactElement {
                     <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)', fontWeight: 500 }}>Environment</div>
                   </div>
                   {testRuns.map((run) => (
-                    <TableRow
-                      key={run.id}
-                      cells={[
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <TableRow key={run.id}>
+                        <div key={run.id + '-name'} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                           <div
                             style={{
                               width: '8px',
@@ -2862,18 +2846,17 @@ function App(): React.ReactElement {
                             {run.name}
                           </div>
                         </div>,
-                        <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)' }}>
+                        <div key={run.id + '-started'} style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)' }}>
                           {formatDate(run.started_at)}
                         </div>,
-                        <div style={{ display: 'flex', alignItems: 'center' }}>{statusBadge(run.status)}</div>,
-                        <div style={{ fontSize: '12px', color: run.result === 'passed' ? '#4ADE80' : run.result === 'failed' ? '#EF4444' : 'rgba(255,255,255,0.4)' }}>
+                        <div key={run.id + '-status'} style={{ display: 'flex', alignItems: 'center' }}>{statusBadge(run.status)}</div>,
+                        <div key={run.id + '-result'} style={{ fontSize: '12px', color: run.result === 'passed' ? '#4ADE80' : run.result === 'failed' ? '#EF4444' : 'rgba(255,255,255,0.4)' }}>
                           {run.result ? run.result.toUpperCase() : '—'}
                         </div>,
-                        <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)' }}>
+                        <div key={run.id + '-env'} style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)' }}>
                           {run.target_environment}
-                        </div>,
-                      ]}
-                    />
+                        </div>
+                    </TableRow>
                   ))}
                 </div>
               )}

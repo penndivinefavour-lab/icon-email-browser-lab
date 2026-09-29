@@ -79,7 +79,7 @@ async function main() {
     last_synced_at: null,
   });
 
-  const account = db.getEmailAccountByIdentityId(identityIds[0]);
+  const account = db.getEmailAccountsByIdentity(identityIds[0])[0];
   if (account) {
     const now = new Date();
 
@@ -195,12 +195,11 @@ async function main() {
   });
 
   for (const entry of logEntries) {
-    db.createActivityLog({
+    db.logActivity({
       action: entry.action,
-      entity: entry.entity,
+      entity_type: entry.entity,
       entity_id: entry.entity_id,
       actor: 'system',
-      result: 'success',
       details: JSON.stringify(entry.details),
     });
   }

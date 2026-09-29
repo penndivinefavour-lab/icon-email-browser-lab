@@ -1,17 +1,18 @@
 # ICON Email & Browser Lab — Project Status
 
-**Updated**: September 28, 2026
+**Updated**: September 29, 2026
 
 ---
 
-## Current Phase: Phase 3/4 — Browser Compatibility + Mock Email E2E
+## Current Phase: Phase 3/4 — COMPLETE
 
 The project has completed:
 - ✅ Phase 1: Foundation (database, email, browser, automation packages)
 - ✅ Phase 2: Core Data Model (CRUD operations, seed data)
 - ✅ Phase 3a: Database browser compatibility refactor (sql.js WASM, cross-platform I/O)
+- ✅ Phase 3b: Vite dev server UI rendering (path alias resolution fixed)
 - ✅ Phase 4: Mock Email E2E verification (full OTP flow working)
-- ⚠️ Phase 3b: Vite dev server UI rendering (path alias resolution issue)
+- ✅ Phase 3/4: Browser console clean (React key warning fixed)
 
 ---
 
@@ -23,7 +24,7 @@ The project has completed:
 
 ### Unit Tests
 - **34/34 tests pass** (`npx tsx --test packages/database/src/index.test.ts`)
-- Duration: ~1200ms
+- Duration: ~1500ms
 
 ### Mock Email E2E Flow
 - ✅ Database initialization
@@ -43,56 +44,11 @@ The project has completed:
 - 10 migration tables created
 - Seed data: 5 identities, 5 email accounts, 3 browser profiles, 2 sessions, 2 test runs, 10 activity logs, verification codes
 
----
-
-## Known Issues ⚠️
-
-### Vite Dev Server Path Alias Resolution
-**Status**: BLOCKED
-
-The Vite dev server fails to resolve `@shared/*` imports from `apps/web/src/App.tsx`.
-
-**Error**: `Failed to resolve import "@shared/index" from "apps/web/src/App.tsx". Does the file exist?`
-
-**Root cause**: The `vite-tsconfig-paths` plugin is not properly resolving the path aliases configured in `tsconfig.json`. Manual alias configuration in `vite.config.ts` also fails due to path resolution differences between Windows long paths and Vite's internal resolution.
-
-**Workaround options**:
-1. Use relative imports in App.tsx instead of path aliases
-2. Switch to a different module bundler configuration
-3. Build a simple HTTP server to serve pre-built assets
-4. Use Vite's `optimizeDeps` configuration to pre-bundle the packages
-
----
-
-## Files Changed (Current Working Tree)
-
-| File | Status | Description |
-|------|--------|-------------|
-| `apps/web/src/App.tsx` | Modified | API call fixes (filterIdentities, getEmailAccountsByIdentity) |
-| `packages/database/src/index.ts` | Modified | Browser compatibility refactor (1144 lines) |
-| `packages/database/src/index.test.ts` | Modified | Test rewrite for new API (34 tests) |
-| `vite.config.ts` | Modified | Added resolve aliases (not working yet) |
-| `scripts/e2e_mock_email.ts` | New | Mock email E2E test script |
-| `scripts/e2e_verify.ts` | New | Vite UI verification script |
-| `start_vite.py` | New | Python script to manage Vite dev server |
-| `QUICKSTART.md` | New | Quick start guide |
-
----
-
-## Git Status
-
-```
-Modified: apps/web/src/App.tsx
-Modified: packages/database/src/index.test.ts
-Modified: packages/database/src/index.ts
-Modified: vite.config.ts
-Untracked: scripts/e2e_mock_email.ts
-Untracked: scripts/e2e_verify.ts
-Untracked: start_vite.py
-Untracked: QUICKSTART.md
-```
-
-Previous commit: `8e804cc` - "feat: complete Phase 1-2 foundation"
+### Browser UI (Vite Dev Server)
+- **HTTP 200** on localhost:3000
+- **All 9 modules render**: Dashboard, Identity Manager, Inbox Manager, OTP/Verification, Browser Profiles, Sessions, Automation/QA, Activity Log, Settings
+- **Browser console clean**: 0 errors, 0 warnings
+- **React key warning**: FIXED (TableRow refactored from `cells` prop to `children`)
 
 ---
 
@@ -109,7 +65,7 @@ packages/
   shared/src/              # ActivityLogger, CSV tools, types
 
 apps/
-  web/src/App.tsx          # React dashboard (3134 lines)
+  web/src/App.tsx          # React dashboard (3117 lines)
   web/src/main.tsx         # React bootstrap
   web/index.html           # Entry point
 ```
@@ -119,41 +75,27 @@ apps/
 - **Tests**: Node.js built-in `node:test` + tsx runner (vitest had resolution issues)
 - **Browser compatibility**: `isBrowser()` checks, `fetchBinary()` for WASM/DB loading
 - **Path aliases**: `@shared/*`, `@database/*`, etc. defined in tsconfig.json
+- **TableRow**: Uses `children` prop (not `cells` array) to avoid React key warnings
+
+---
+
+## Git Status
+
+```
+Branch: main
+Last commit: a5c4ea5 (Phase 3/4 fixes)
+Pending: Phase 3/4 final checkpoint
+```
 
 ---
 
 ## Next Steps
 
-### Option A: Fix Vite Path Aliases (Recommended)
-1. Investigate `vite-tsconfig-paths` plugin behavior on Windows
-2. Consider using relative imports in App.tsx to bypass alias issue
-3. Alternative: Create a Vite plugin to handle path resolution
-
-### Option B: Build Pre-packaged Assets
-1. Use `tsc` to compile packages to `dist/`
-2. Configure Vite to use compiled JS files
-3. Serve via simple HTTP server or Netlify
-
-### Option C: Desktop Wrapper
-1. Wrap existing code in Tauri or Electron
-2. Avoid browser bundling issues entirely
-3. Leverage Node.js capabilities directly
-
----
-
-## Blockers
-
-1. **Vite path alias resolution** — blocks UI testing and visualization
-2. **Playwright browser integration** — not yet connected to UI
-
----
-
-## Recommended Immediate Actions
-
-1. Fix the Vite path alias issue (Option A above)
-2. Run the E2E verification script against a working dev server
-3. Commit all changes and push to GitHub
-4. Consider Tauri wrapper for desktop deployment
+### Phase 5: Playwright Browser Isolation Testing
+- Install Playwright browsers (chromium, firefox)
+- Create isolated browser profiles for QA testing
+- Verify profile isolation (separate cookies/localStorage)
+- Run existing 5 test cases against isolated profiles
 
 ---
 
@@ -164,7 +106,10 @@ apps/
 | TypeScript errors | 0 |
 | Unit tests passed | 34/34 |
 | E2E mock email flow | PASS |
-| Vite dev server | BLOCKED (path alias issue) |
+| Vite dev server | ✅ Working (HTTP 200) |
+| Browser modules rendering | 9/9 |
+| Browser console errors | 0 |
+| Browser console warnings | 0 |
+| React key warning | FIXED |
 | Database migrations | ✅ Working |
 | Seed script | ✅ Working |
-| Git commits | 1 (phase 1-2), pending (phase 3-4) |

@@ -1,0 +1,66 @@
+# Git
+.gitignore
+dist/
+data/
+.env
+.env.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Build
+coverage/
+
+# Temporary
+*.tmp
+tmp/
+
+# Dependency directories
+node_modules/
+
+# Runtime / generated
+.vite_pid.txt
+.vite_startup.log
+browser-report.json
+nul
+
+# Debug / diagnostic output
+react-warning.txt
+warn-stack.txt
+scripts/e2e_404.ts
+scripts/e2e_abtest.ts
+scripts/e2e_browser.ts
+scripts/e2e_browser_full.ts
+scripts/e2e_clean.ts
+scripts/e2e_diag.ts
+scripts/e2e_diag2.ts
+scripts/e2e_dom.ts
+scripts/e2e_dump.ts
+scripts/e2e_fetch_test.ts
+scripts/e2e_net.ts
+scripts/e2e_nocache.ts
+scripts/e2e_probe.ts
+scripts/e2e_probe2.ts
+scripts/e2e_rb.ts
+scripts/e2e_report.ts
+scripts/e2e_seed_check.ts
+scripts/e2e_singleton.ts
+scripts/e2e_sqlprobe.ts
+scripts/e2e_stack.ts
+scripts/e2e_tabs.ts
+scripts/e2e_warn.ts
+scripts/e2e_wasm_debug.ts
+scripts/e2e_which.ts
+scripts/start_vite_debug.js
+test_vite.py

@@ -1,11 +1,6 @@
 /** @file database/src/index.ts — sql.js with cross-platform support for Node.js + browser */
 // @ts-nocheck
 import initSqlJs from 'sql.js';
-import path from 'path';
-import { fileURLToPath } from 'url';
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const SQLJS_WASM_PATH = path.join(__dirname, '..', '..', '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm');
 
 declare const process: { cwd(): string } | undefined;
 declare const window: { localStorage: { getItem(k: string): string | null; setItem(k: string, v: string): void; removeItem(k: string): void } } | undefined;
@@ -15,15 +10,30 @@ declare const require: (mod: string) => any;
 
 function isBrowser(): boolean { return typeof window !== 'undefined'; }
 
+function resolveSqlJsWasmPath(): string {
+  if (isBrowser()) return 'data/sql-wasm.wasm'; // served from Vite public dir
+  // Node-only: resolve relative to CWD / installed node_modules without top-level url/path imports
+  try {
+    return require('path').join(process.cwd(), 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm');
+  } catch {
+    return 'sql-wasm.wasm';
+  }
+}
+
 // ─── Cross-platform I/O ─────────────────────────────────────────────
-async function readBinary(filePath: string): Promise<ArrayBuffer> {
+async function readBinary(filePath: string): Promise<Uint8Array> {
+  if (isBrowser()) {
+    // NOTE: sql.js only honours Uint8Array input. Passing a raw ArrayBuffer makes it
+    // treat the bytes as an empty in-memory database (no tables at all).
+    const res = await fetch(filePath);
+    if (!res.ok) throw new Error(`Failed to fetch ${filePath}: HTTP ${res.status}`);
+    return new Uint8Array(await res.arrayBuffer());
+  }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const buf: any = isBrowser()
-    ? (await fetch(filePath)).arrayBuffer()
-    : require('fs').readFileSync(filePath);
-  if (buf instanceof Uint8Array) return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
-  if (buf instanceof ArrayBuffer) return buf;
-  return new Uint8Array(buf).buffer as ArrayBuffer;
+  const buf: any = require('fs').readFileSync(filePath);
+  if (buf instanceof Uint8Array) return buf;
+  if (buf instanceof ArrayBuffer) return new Uint8Array(buf);
+  return new Uint8Array(buf);
 }
 
 async function fileExists(filePath: string): Promise<boolean> {
@@ -34,10 +44,32 @@ async function fileExists(filePath: string): Promise<boolean> {
 
 async function persistDb(data: ArrayBuffer, filePath: string): Promise<void> {
   if (isBrowser()) {
-    window!.localStorage.setItem('icon_lab_db', Buffer.from(data).toString('base64'));
+    const s = dataToBase64(new Uint8Array(data));
+    window!.localStorage.setItem('icon_lab_db', s);
   } else {
-    require('fs').writeFileSync(filePath, Buffer.from(data));
+    require('fs').writeFileSync(filePath, new Uint8Array(data));
   }
+}
+
+function dataToBase64(bytes: Uint8Array): string {
+  let bin = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    bin += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunk)));
+  }
+  return btoa(bin);
+}
+
+function base64ToBytes(s: string): Uint8Array {
+  const bin = atob(s);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+async function readDbFromLocalStorage(): Promise<Uint8Array | null> {
+  const s = window!.localStorage.getItem('icon_lab_db');
+  return s ? base64ToBytes(s) : null;
 }
 
 async function ensureDir(dirPath: string): Promise<void> {
@@ -48,24 +80,23 @@ async function ensureDir(dirPath: string): Promise<void> {
 }
 
 function getDbPath(): string {
-  return isBrowser() ? 'data/icon-lab.db' : path.join(process!.cwd(), 'data', 'icon-lab.db');
+  return isBrowser() ? 'data/icon-lab.db' : require('path').join(process.cwd(), 'data', 'icon-lab.db');
 }
 
 function getWasmPath(): string {
-  return isBrowser() ? 'data/sql-wasm.wasm' : SQLJS_WASM_PATH;
+  return resolveSqlJsWasmPath();
 }
 
 async function initSqlJsEnv(): Promise<{ Database: new (data?: ArrayLike<number> | null) => import('@types/sql.js').Database }> {
   if (isBrowser()) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const Module = await import('../node_modules/sql.js/dist/sql-wasm.js') as any;
-    // @ts-expect-error - dynamic import of sql-wasm.js AMD module
-    const sqlJs = await Module.default({ locateFile: (f: string) => `data/${f}` });
-    return sqlJs as any;
+    // Use static sql.js import (bundled by Vite) and load WASM from public/data/
+    const SQL = await initSqlJs({
+      locateFile: (filename: string) => `/data/${filename}`,
+    });
+    return SQL;
   }
-  const wasmBin = await readBinary(SQLJS_WASM_PATH);
-  const safeWasm: ArrayBuffer = wasmBin instanceof ArrayBuffer ? wasmBin : new Uint8Array(wasmBin).buffer as unknown as ArrayBuffer;
-  const sqlJs = await initSqlJs({ wasmBinary: safeWasm });
+  const wasmBin = await readBinary(resolveSqlJsWasmPath());
+  const sqlJs = await initSqlJs({ wasmBinary: wasmBin.buffer.slice(wasmBin.byteOffset, wasmBin.byteOffset + wasmBin.byteLength) });
   return sqlJs;
 }
 
@@ -123,16 +154,26 @@ export class Database {
 
   async initialize(): Promise<void> {
     if (this.initialized) return;
-    await ensureDir(path.dirname(this.dbPath));
     const sqlJs = await initSqlJsEnv();
     const DatabaseCtor = sqlJs.Database;
-    if (await fileExists(this.dbPath)) {
-      this.db = new DatabaseCtor(await readBinary(this.dbPath));
+    let dbData: Uint8Array | null = null;
+    if (isBrowser()) {
+      // Browser: prefer locally persisted copy (from save()), else the seeded public DB
+      dbData = await readDbFromLocalStorage();
+      if (!dbData) dbData = await readBinary(this.dbPath);
     } else {
-      this.db = new DatabaseCtor();
+      await ensureDir(require('path').dirname(this.dbPath));
+      if (await fileExists(this.dbPath)) dbData = await readBinary(this.dbPath);
     }
+    this.db = dbData ? new DatabaseCtor(dbData) : new DatabaseCtor();
     this.runMigrations();
     this.initialized = true;
+  }
+
+  /** @internal test-only */
+  _rawCount(): number {
+    const r = this.db!.exec('SELECT COUNT(*) FROM identities');
+    return Number(r[0]?.values[0][0] ?? -1);
   }
 
   private runMigrations(): void {
@@ -184,7 +225,7 @@ export class Database {
 
   // ── Browser profiles ────────────────────────────────────────────────
   createBrowserProfile(d: { name: string; browser?: string; directory?: string; identity_id?: string | null }): BrowserProfile {
-    this.ensureInit(); const id = genId(); const dir = d.directory ?? path.join(process!.cwd() || '', 'browser-profiles', id);
+    this.ensureInit(); const id = genId(); const dir = d.directory ?? require('path').join(process.cwd() || '', 'browser-profiles', id);
     this.db!.run(`INSERT INTO browser_profiles (id,name,browser,directory,identity_id,status,created_at) VALUES (?,?,?,?,?,'idle',datetime('now'))`, [id, d.name, d.browser ?? 'chromium', dir, d.identity_id ?? null]); this.save(); return this.getBrowserProfileById(id)!;
   }
   getBrowserProfileById(id: string): BrowserProfile | null { this.ensureInit(); const r = this.db!.exec(`SELECT * FROM browser_profiles WHERE id=?`, [id]); return r.length ? rowToBrowserProfile(r[0].values[0]) : null; }

@@ -2,12 +2,15 @@
  * Browser Profile Manager
  *
  * Manages isolated browser profiles for QA/testing using Playwright.
- * Each profile has its own storage directory.
+ * Each profile uses a persistent browser context (launchPersistentContext)
+ * so cookies, localStorage, and session state are fully isolated
+ * and survive close/reopen cycles.
  */
 
 import { chromium, firefox, webkit, Browser, BrowserContext, Page } from '@playwright/test';
 import path from 'path';
 import fs from 'fs';
+import { randomUUID } from 'crypto';
 
 export interface BrowserProfileConfig {
   id: string;
@@ -23,9 +26,16 @@ export interface BrowserSession {
   profileId: string;
   context: BrowserContext;
   page: Page;
-  browser: Browser;
   startedAt: Date;
   isActive: boolean;
+}
+
+export interface LaunchOptions {
+  headless?: boolean;
+  slowMo?: number;
+  viewport?: { width: number; height: number };
+  userAgent?: string;
+  ignoreHTTPSErrors?: boolean;
 }
 
 export class BrowserProfileManager {
@@ -90,6 +100,10 @@ export class BrowserProfileManager {
     return true;
   }
 
+  /**
+   * Launch a profile with persistent browser context.
+   * Uses launchPersistentContext so cookies/localStorage persist across sessions.
+   */
   async launchProfile(
     id: string,
     options: LaunchOptions = {}
@@ -108,33 +122,24 @@ export class BrowserProfileManager {
     const browserType = this.getBrowserType(profile.browser);
     const launchOptions: any = {
       headless: options.headless ?? true,
+      viewport: options.viewport || { width: 1280, height: 720 },
     };
 
-    // Add slow mode for debugging
     if (options.slowMo) {
       launchOptions.slowMo = options.slowMo;
     }
 
-    const browser = await browserType.launch(launchOptions);
+    // Use launchPersistentContext for true isolation
+    // This creates a real browser profile directory that persists state
+    const context = await browserType.launchPersistentContext(profile.directory, launchOptions);
 
-    // Create context with isolated storage
-    const context = await browser.newContext({
-      locale: 'en-US',
-      viewport: options.viewport || { width: 1280, height: 720 },
-      userAgent: options.userAgent || undefined,
-    });
-
-    // Set up storage state for the profile directory
-    const storageStatePath = path.join(profile.directory, 'storage.json');
-
-    const page = await context.newPage();
+    const page = context.pages()[0] || await context.newPage();
 
     const session: BrowserSession = {
-      id: id,
+      id: randomUUID(),
       profileId: id,
       context,
       page,
-      browser,
       startedAt: new Date(),
       isActive: true,
     };
@@ -149,7 +154,6 @@ export class BrowserProfileManager {
 
     session.isActive = false;
     await session.context.close();
-    await session.browser.close();
     this.sessions.delete(id);
   }
 
@@ -190,7 +194,6 @@ export class BrowserProfileManager {
       session.isActive = false;
       try {
         await session.context.close();
-        await session.browser.close();
       } catch {
         // Ignore errors during cleanup
       }
@@ -210,14 +213,6 @@ export class BrowserProfileManager {
         return chromium;
     }
   }
-}
-
-export interface LaunchOptions {
-  headless?: boolean;
-  slowMo?: number;
-  viewport?: { width: number; height: number };
-  userAgent?: string;
-  ignoreHTTPSErrors?: boolean;
 }
 
 // Singleton

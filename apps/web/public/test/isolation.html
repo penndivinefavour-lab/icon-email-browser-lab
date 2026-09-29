@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ICON Lab — Isolation Test Fixture</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f0f1a;
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 40px 20px;
+    }
+    h1 {
+      font-size: 24px;
+      font-weight: 700;
+      color: #a78bfa;
+      margin-bottom: 8px;
+    }
+    .subtitle {
+      font-size: 14px;
+      color: rgba(255,255,255,0.4);
+      margin-bottom: 32px;
+    }
+    .card {
+      background: rgba(30, 30, 46, 0.6);
+      border: 1px solid rgba(107, 33, 168, 0.2);
+      border-radius: 12px;
+      padding: 24px;
+      width: 100%;
+      max-width: 500px;
+      margin-bottom: 20px;
+    }
+    .card h2 {
+      font-size: 16px;
+      font-weight: 600;
+      color: #c4b5fd;
+      margin-bottom: 16px;
+    }
+    .field {
+      margin-bottom: 16px;
+    }
+    label {
+      display: block;
+      font-size: 12px;
+      color: rgba(255,255,255,0.5);
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    input[type="text"] {
+      width: 100%;
+      padding: 10px 14px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 8px;
+      color: #fff;
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    input[type="text"]:focus {
+      border-color: rgba(167, 139, 250, 0.5);
+    }
+    button {
+      padding: 10px 20px;
+      background: rgba(107, 33, 168, 0.3);
+      border: 1px solid rgba(107, 33, 168, 0.4);
+      border-radius: 8px;
+      color: #c4b5fd;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    button:hover {
+      background: rgba(107, 33, 168, 0.5);
+      color: #fff;
+    }
+    .status {
+      margin-top: 12px;
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-family: 'Courier New', monospace;
+    }
+    .status.success {
+      background: rgba(74, 222, 128, 0.1);
+      border: 1px solid rgba(74, 222, 128, 0.2);
+      color: #4ade80;
+    }
+    .status.info {
+      background: rgba(59, 130, 246, 0.1);
+      border: 1px solid rgba(59, 130, 246, 0.2);
+      color: #60a5fa;
+    }
+    .state-display {
+      background: rgba(0,0,0,0.3);
+      border-radius: 8px;
+      padding: 14px;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .badge {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .badge.ok {
+      background: rgba(74, 222, 128, 0.15);
+      color: #4ade80;
+    }
+    .badge.empty {
+      background: rgba(255,255,255,0.05);
+      color: rgba(255,255,255,0.3);
+    }
+  </style>
+</head>
+<body>
+  <h1>Isolation Test Fixture</h1>
+  <p class="subtitle">Local-only page for verifying browser profile isolation</p>
+
+  <div class="card">
+    <h2>Set Profile State</h2>
+    <div class="field">
+      <label for="lsKey">LocalStorage Key</label>
+      <input type="text" id="lsKey" value="profile_marker" placeholder="Storage key">
+    </div>
+    <div class="field">
+      <label for="lsValue">LocalStorage Value</label>
+      <input type="text" id="lsValue" placeholder="Unique value for this profile">
+    </div>
+    <div class="field">
+      <label for="cookieValue">Cookie Value</label>
+      <input type="text" id="cookieValue" placeholder="Cookie value for this profile">
+    </div>
+    <button id="setStateBtn" onclick="setState()">Set State</button>
+    <div id="setStatus" class="status" style="display:none;"></div>
+  </div>
+
+  <div class="card">
+    <h2>Current State</h2>
+    <div class="field">
+      <label>LocalStorage</label>
+      <div id="lsDisplay" class="state-display">Loading...</div>
+    </div>
+    <div class="field">
+      <label>Cookies</label>
+      <div id="cookieDisplay" class="state-display">Loading...</div>
+    </div>
+    <button onclick="refreshState()">Refresh State</button>
+  </div>
+
+  <div class="card">
+    <h2>Profile Identity</h2>
+    <div class="field">
+      <label>Profile ID (set via URL param or localStorage)</label>
+      <input type="text" id="profileIdInput" placeholder="e.g., profile-a">
+    </div>
+    <button onclick="setProfileId()">Set Profile ID</button>
+    <div id="profileIdStatus" class="status" style="display:none;"></div>
+  </div>
+
+  <script>
+    function getState() {
+      const ls = {};
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        ls[key] = localStorage.getItem(key);
+      }
+      const cookies = document.cookie;
+      return { localStorage: ls, cookies };
+    }
+
+    function displayState() {
+      const state = getState();
+      const lsEl = document.getElementById('lsDisplay');
+      const cookieEl = document.getElementById('cookieDisplay');
+
+      const lsEntries = Object.entries(state.localStorage);
+      if (lsEntries.length === 0) {
+        lsEl.innerHTML = '<span class="badge empty">Empty</span>';
+      } else {
+        lsEl.innerHTML = lsEntries.map(([k, v]) =>
+          `<span class="badge ok">${escapeHtml(k)}</span> = ${escapeHtml(v)}`
+        ).join('\n');
+      }
+
+      if (!state.cookies) {
+        cookieEl.innerHTML = '<span class="badge empty">No cookies</span>';
+      } else {
+        cookieEl.innerHTML = state.cookies.split('; ').map(c => {
+          const [k, ...v] = c.split('=');
+          return `<span class="badge ok">${escapeHtml(k)}</span> = ${escapeHtml(v.join('='))}`;
+        }).join('\n');
+      }
+    }
+
+    function escapeHtml(s) {
+      const div = document.createElement('div');
+      div.textContent = s;
+      return div.innerHTML;
+    }
+
+    function setState() {
+      const key = document.getElementById('lsKey').value.trim();
+      const value = document.getElementById('lsValue').value.trim();
+      const cookieVal = document.getElementById('cookieValue').value.trim();
+      const status = document.getElementById('setStatus');
+
+      if (!key || !value) {
+        status.className = 'status info';
+        status.textContent = 'Please provide both key and value';
+        status.style.display = 'block';
+        return;
+      }
+
+      localStorage.setItem(key, value);
+
+      if (cookieVal) {
+        const expires = new Date(Date.now() + 24 * 60 * 60 * 1000).toUTCString();
+        document.cookie = `${key}=${encodeURIComponent(cookieVal)};expires=${expires};path=/;SameSite=Lax`;
+      }
+
+      status.className = 'status success';
+      status.textContent = 'State saved successfully';
+      status.style.display = 'block';
+      displayState();
+    }
+
+    function refreshState() {
+      displayState();
+    }
+
+    function setProfileId() {
+      const id = document.getElementById('profileIdInput').value.trim();
+      const status = document.getElementById('profileIdStatus');
+      if (!id) {
+        status.className = 'status info';
+        status.textContent = 'Please enter a profile ID';
+        status.style.display = 'block';
+        return;
+      }
+      localStorage.setItem('profile_id', id);
+      status.className = 'status success';
+      status.textContent = `Profile ID set to: ${id}`;
+      status.style.display = 'block';
+      displayState();
+    }
+
+    // Auto-load profile ID from URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const profileId = urlParams.get('profile');
+    if (profileId) {
+      document.getElementById('profileIdInput').value = profileId;
+      localStorage.setItem('profile_id', profileId);
+    }
+
+    // Initial display
+    displayState();
+  </script>
+</body>
+</html>

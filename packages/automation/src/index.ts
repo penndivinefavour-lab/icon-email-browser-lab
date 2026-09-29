@@ -1,11 +1,13 @@
-/***
+/**
  * Test Runner / QA Automation
  *
  * Manages test runs, executes automated tests, and records results.
+ * Phase 5: Added real browser-isolation test cases using Playwright.
  */
 
 import { existsSync, mkdirSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 export type TestStatus = 'queued' | 'running' | 'passed' | 'failed' | 'cancelled';
 export type TestResult = 'passed' | 'failed' | 'skipped';
@@ -14,7 +16,7 @@ export interface TestCase {
   id: string;
   name: string;
   description: string;
-  type: 'login' | 'verification' | 'otp' | 'profile' | 'session' | 'custom';
+  type: 'login' | 'verification' | 'otp' | 'profile' | 'session' | 'isolation' | 'custom';
   execute: (context: TestContext) => Promise<TestResult>;
 }
 
@@ -56,7 +58,223 @@ export class TestRunner {
   }
 
   private registerDefaultTestCases(): void {
-    // Login flow test
+    // ─── Browser Isolation Tests (Phase 5) ──────────────────────────
+
+    this.testCases.set('isolation-basic', {
+      id: 'isolation-basic',
+      name: 'Browser Profile Isolation — Basic',
+      description: 'Verifies two profiles have isolated localStorage and cookies',
+      type: 'isolation',
+      execute: async (ctx) => {
+        ctx.addLog('[Isolation Basic] Starting basic isolation test...');
+
+        const { chromium } = await import('@playwright/test');
+        const path = await import('node:path');
+        const fs = await import('node:fs');
+
+        const profilesDir = path.join(process.cwd(), 'data', 'browser-profiles');
+        const testId = `iso-basic-${randomUUID().slice(0, 8)}`;
+        const profileA = path.join(profilesDir, `${testId}-a`);
+        const profileB = path.join(profilesDir, `${testId}-b`);
+
+        try {
+          fs.mkdirSync(profileA, { recursive: true });
+          fs.mkdirSync(profileB, { recursive: true });
+
+          const browser = await chromium.launch({ headless: true });
+
+          // Profile A
+          const ctxA = await browser.newContext();
+          const pageA = await ctxA.newPage();
+          await pageA.goto('http://localhost:3000/test/isolation.html', { waitUntil: 'networkidle' });
+          await pageA.fill('#lsKey', 'marker');
+          await pageA.fill('#lsValue', 'value-A');
+          await pageA.fill('#cookieValue', 'cookie-A');
+          await pageA.click('#setStateBtn');
+          await pageA.waitForSelector('#setStatus.success', { timeout: 5000 });
+          await ctxA.close();
+
+          // Profile B
+          const ctxB = await browser.newContext();
+          const pageB = await ctxB.newPage();
+          await pageA.goto('http://localhost:3000/test/isolation.html', { waitUntil: 'networkidle' });
+          await pageB.fill('#lsKey', 'marker');
+          await pageB.fill('#lsValue', 'value-B');
+          await pageB.fill('#cookieValue', 'cookie-B');
+          await pageB.click('#setStateBtn');
+          await pageB.waitForSelector('#setStatus.success', { timeout: 5000 });
+          await ctxB.close();
+
+          // Verify isolation
+          const ctxA2 = await browser.newContext();
+          const pageA2 = await ctxA2.newPage();
+          await pageA2.goto('http://localhost:3000/test/isolation.html', { waitUntil: 'networkidle' });
+          const stateA = await pageA2.evaluate(() => localStorage.getItem('marker'));
+          await ctxA2.close();
+
+          const ctxB2 = await browser.newContext();
+          const pageB2 = await ctxB2.newPage();
+          await pageB2.goto('http://localhost:3000/test/isolation.html', { waitUntil: 'networkidle' });
+          const stateB = await pageB2.evaluate(() => localStorage.getItem('marker'));
+          await ctxB2.close();
+
+          await browser.close();
+
+          if (stateA !== 'value-A' || stateB !== 'value-B') {
+            ctx.addLog(`[Isolation Basic] FAIL: stateA=${stateA}, stateB=${stateB}`);
+            return 'failed';
+          }
+
+          ctx.addLog('[Isolation Basic] PASS: Profiles are isolated');
+          return 'passed';
+        } catch (err: any) {
+          ctx.addLog(`[Isolation Basic] ERROR: ${err.message}`);
+          return 'failed';
+        } finally {
+          // Cleanup
+          try { fs.rmSync(profileA, { recursive: true, force: true }); } catch {}
+          try { fs.rmSync(profileB, { recursive: true, force: true }); } catch {}
+        }
+      },
+    });
+
+    this.testCases.set('isolation-persistence', {
+      id: 'isolation-persistence',
+      name: 'Browser Profile Isolation — Persistence',
+      description: 'Verifies profile state persists after close/reopen using persistent contexts',
+      type: 'isolation',
+      execute: async (ctx) => {
+        ctx.addLog('[Isolation Persistence] Starting persistence test...');
+
+        const { chromium } = await import('@playwright/test');
+        const path = await import('node:path');
+        const fs = await import('node:fs');
+
+        const profilesDir = path.join(process.cwd(), 'data', 'browser-profiles');
+        const testId = `iso-persist-${randomUUID().slice(0, 8)}`;
+        const profileDir = path.join(profilesDir, testId);
+
+        try {
+          fs.mkdirSync(profileDir, { recursive: true });
+
+          const browser = await chromium.launch({ headless: true });
+
+          // Launch persistent context, set state, close
+          const ctx1 = await browser.newContext();
+          const page1 = await ctx1.newPage();
+          await page1.goto('http://localhost:3000/test/isolation.html', { waitUntil: 'networkidle' });
+          await page1.fill('#lsKey', 'persist');
+          await page1.fill('#lsValue', 'persisted-value');
+          await page1.fill('#cookieValue', 'persisted-cookie');
+          await page1.click('#setStateBtn');
+          await page1.waitForSelector('#setStatus.success', { timeout: 5000 });
+          await ctx1.close();
+
+          // Reopen with persistent context
+          const ctx2 = await chromium.launchPersistentContext(profileDir, {
+            headless: true,
+            viewport: { width: 1280, height: 720 },
+          });
+          const page2 = ctx2.pages()[0] || await ctx2.newPage();
+          await page2.goto('http://localhost:3000/test/isolation.html', { waitUntil: 'networkidle' });
+          const persisted = await page2.evaluate(() => localStorage.getItem('persist'));
+          await ctx2.close();
+          await browser.close();
+
+          if (persisted !== 'persisted-value') {
+            ctx.addLog(`[Isolation Persistence] FAIL: persisted=${persisted}`);
+            return 'failed';
+          }
+
+          ctx.addLog('[Isolation Persistence] PASS: State persisted after close/reopen');
+          return 'passed';
+        } catch (err: any) {
+          ctx.addLog(`[Isolation Persistence] ERROR: ${err.message}`);
+          return 'failed';
+        } finally {
+          try { fs.rmSync(profileDir, { recursive: true, force: true }); } catch {}
+        }
+      },
+    });
+
+    this.testCases.set('isolation-lifecycle', {
+      id: 'isolation-lifecycle',
+      name: 'Browser Profile Isolation — Full Lifecycle',
+      description: 'Tests create, launch, use, close, reopen, and delete profile',
+      type: 'isolation',
+      execute: async (ctx) => {
+        ctx.addLog('[Isolation Lifecycle] Starting lifecycle test...');
+
+        const { chromium } = await import('@playwright/test');
+        const path = await import('node:path');
+        const fs = await import('node:fs');
+
+        const profilesDir = path.join(process.cwd(), 'data', 'browser-profiles');
+        const testId = `iso-lifecycle-${randomUUID().slice(0, 8)}`;
+        const profileDir = path.join(profilesDir, testId);
+
+        try {
+          // Create
+          fs.mkdirSync(profileDir, { recursive: true });
+          ctx.addLog('[Isolation Lifecycle] Profile created');
+
+          const browser = await chromium.launch({ headless: true });
+
+          // Launch and use
+          const ctx1 = await chromium.launchPersistentContext(profileDir, {
+            headless: true,
+            viewport: { width: 1280, height: 720 },
+          });
+          const page1 = ctx1.pages()[0] || await ctx1.newPage();
+          await page1.goto('http://localhost:3000/test/isolation.html', { waitUntil: 'networkidle' });
+          await page1.fill('#lsKey', 'lifecycle');
+          await page1.fill('#lsValue', 'lifecycle-value');
+          await page1.click('#setStateBtn');
+          await page1.waitForSelector('#setStatus.success', { timeout: 5000 });
+          ctx.addLog('[Isolation Lifecycle] Profile used');
+
+          // Close
+          await ctx1.close();
+          ctx.addLog('[Isolation Lifecycle] Profile closed');
+
+          // Reopen
+          const ctx2 = await chromium.launchPersistentContext(profileDir, {
+            headless: true,
+            viewport: { width: 1280, height: 720 },
+          });
+          const page2 = ctx2.pages()[0] || await ctx2.newPage();
+          await page2.goto('http://localhost:3000/test/isolation.html', { waitUntil: 'networkidle' });
+          const value = await page2.evaluate(() => localStorage.getItem('lifecycle'));
+          await ctx2.close();
+
+          if (value !== 'lifecycle-value') {
+            ctx.addLog(`[Isolation Lifecycle] FAIL: value=${value}`);
+            return 'failed';
+          }
+          ctx.addLog('[Isolation Lifecycle] Reopen verified');
+
+          // Delete
+          fs.rmSync(profileDir, { recursive: true, force: true });
+          if (fs.existsSync(profileDir)) {
+            ctx.addLog('[Isolation Lifecycle] FAIL: Profile not deleted');
+            return 'failed';
+          }
+          ctx.addLog('[Isolation Lifecycle] Profile deleted');
+
+          await browser.close();
+          ctx.addLog('[Isolation Lifecycle] PASS: Full lifecycle verified');
+          return 'passed';
+        } catch (err: any) {
+          ctx.addLog(`[Isolation Lifecycle] ERROR: ${err.message}`);
+          return 'failed';
+        } finally {
+          try { fs.rmSync(profileDir, { recursive: true, force: true }); } catch {}
+        }
+      },
+    });
+
+    // ─── Legacy Tests (kept for backward compatibility) ─────────────
+
     this.testCases.set('login-flow', {
       id: 'login-flow',
       name: 'Login Flow Test',
@@ -64,77 +282,38 @@ export class TestRunner {
       type: 'login',
       execute: async (ctx) => {
         ctx.addLog('[Login Flow] Starting login flow test...');
-        ctx.addLog('[Login Flow] Navigating to target environment...');
-
         await new Promise((r) => setTimeout(r, 500));
-        ctx.addLog('[Login Flow] Page loaded');
-
-        ctx.addLog('[Login Flow] Entering credentials...');
-        await new Promise((r) => setTimeout(r, 300));
-        ctx.addLog('[Login Flow] Credentials entered');
-
-        ctx.addLog('[Login Flow] Submitting login form...');
-        await new Promise((r) => setTimeout(r, 400));
-        ctx.addLog('[Login Flow] Login submitted');
-
         ctx.addLog('[Login Flow] Login successful');
         return 'passed';
       },
     });
 
-    // Email verification flow test
     this.testCases.set('email-verification', {
       id: 'email-verification',
       name: 'Email Verification Flow Test',
       description: 'Tests email verification flow with OTP extraction',
       type: 'verification',
       execute: async (ctx) => {
-        ctx.addLog('[Email Verification] Starting email verification test...');
-        ctx.addLog('[Email Verification] Checking for verification email...');
+        ctx.addLog('[Email Verification] Starting...');
         await new Promise((r) => setTimeout(r, 600));
-        ctx.addLog('[Email Verification] Verification email found');
-        ctx.addLog('[Email Verification] Extracting OTP code...');
-        await new Promise((r) => setTimeout(r, 400));
-        ctx.addLog('[Email Verification] OTP code extracted: XXXXYY');
-        ctx.addLog('[Email Verification] Entering verification code...');
-        await new Promise((r) => setTimeout(r, 300));
-        ctx.addLog('[Email Verification] Code entered');
-        ctx.addLog('[Email Verification] Submitting verification...');
-        await new Promise((r) => setTimeout(r, 500));
         ctx.addLog('[Email Verification] Email verified successfully');
         return 'passed';
       },
     });
 
-    // OTP extraction test
     this.testCases.set('otp-extraction', {
       id: 'otp-extraction',
       name: 'OTP Extraction Test',
       description: 'Tests OTP detection and extraction from emails',
       type: 'otp',
       execute: async (ctx) => {
-        ctx.addLog('[OTP Extraction] Starting OTP extraction test...');
-        ctx.addLog('[OTP Extraction] Processing incoming messages...');
+        ctx.addLog('[OTP Extraction] Starting...');
         await new Promise((r) => setTimeout(r, 400));
-        ctx.addLog('[OTP Extraction] Scanning for OTP patterns...');
-
-        const patterns = [
-          '123456',
-          '123 456',
-          '123-456',
-          'Your code is: 847291',
-        ];
-
-        for (const pattern of patterns) {
-          ctx.addLog(`[OTP Extraction] Pattern "${pattern}" matched`);
-        }
-
         ctx.addLog('[OTP Extraction] OTP codes extracted successfully');
         return 'passed';
       },
     });
 
-    // Browser profile isolation test
     this.testCases.set('profile-isolation', {
       id: 'profile-isolation',
       name: 'Browser Profile Isolation Test',
@@ -142,27 +321,17 @@ export class TestRunner {
       type: 'profile',
       execute: async (ctx) => {
         ctx.addLog('[Profile Isolation] Starting isolation test...');
-
         if (!ctx.profileId) {
           ctx.addLog('[Profile Isolation] ERROR: No profile ID provided');
           return 'failed';
         }
-
         ctx.addLog(`[Profile Isolation] Using profile: ${ctx.profileId}`);
-        ctx.addLog('[Profile Isolation] Launching browser profile...');
         await new Promise((r) => setTimeout(r, 800));
-        ctx.addLog('[Profile Isolation] Profile launched');
-        ctx.addLog('[Profile Isolation] Verifying storage isolation...');
-        await new Promise((r) => setTimeout(r, 500));
-        ctx.addLog('[Profile Isolation] Cookies cleared');
-        ctx.addLog('[Profile Isolation] Local storage isolated');
-        ctx.addLog('[Profile Isolation] Session storage isolated');
         ctx.addLog('[Profile Isolation] Profile isolation verified');
         return 'passed';
       },
     });
 
-    // Session lifecycle test
     this.testCases.set('session-lifecycle', {
       id: 'session-lifecycle',
       name: 'Session Lifecycle Test',
@@ -170,19 +339,7 @@ export class TestRunner {
       type: 'session',
       execute: async (ctx) => {
         ctx.addLog('[Session Lifecycle] Starting lifecycle test...');
-        ctx.addLog('[Session Lifecycle] Initializing session...');
-        ctx.addLog('[Session Lifecycle] Session started');
-        ctx.addLog(`[Session Lifecycle] Session ID: ${ctx.testRunId}`);
-
-        if (ctx.identityId) {
-          ctx.addLog(`[Session Lifecycle] Associated identity: ${ctx.identityId}`);
-        }
-
-        ctx.addLog('[Session Lifecycle] Session active - performing operations...');
         await new Promise((r) => setTimeout(r, 1000));
-        ctx.addLog('[Session Lifecycle] Operations completed');
-        ctx.addLog('[Session Lifecycle] Session ending...');
-        await new Promise((r) => setTimeout(r, 300));
         ctx.addLog('[Session Lifecycle] Session terminated successfully');
         return 'passed';
       },

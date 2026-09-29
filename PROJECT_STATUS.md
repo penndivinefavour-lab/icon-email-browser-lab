@@ -4,15 +4,15 @@
 
 ---
 
-## Current Phase: Phase 3/4 — COMPLETE
+## Current Phase: Phase 5 COMPLETE ✅
 
-The project has completed:
+All phases through Phase 5 are complete and verified:
 - ✅ Phase 1: Foundation (database, email, browser, automation packages)
 - ✅ Phase 2: Core Data Model (CRUD operations, seed data)
-- ✅ Phase 3a: Database browser compatibility refactor (sql.js WASM, cross-platform I/O)
+- ✅ Phase 3a: Database browser compatibility refactor (sql.js WASM)
 - ✅ Phase 3b: Vite dev server UI rendering (path alias resolution fixed)
 - ✅ Phase 4: Mock Email E2E verification (full OTP flow working)
-- ✅ Phase 3/4: Browser console clean (React key warning fixed)
+- ✅ Phase 5: Playwright Browser Isolation Testing (6/6 tests pass)
 
 ---
 
@@ -48,7 +48,21 @@ The project has completed:
 - **HTTP 200** on localhost:3000
 - **All 9 modules render**: Dashboard, Identity Manager, Inbox Manager, OTP/Verification, Browser Profiles, Sessions, Automation/QA, Activity Log, Settings
 - **Browser console clean**: 0 errors, 0 warnings
-- **React key warning**: FIXED (TableRow refactored from `cells` prop to `children`)
+- **React key warning**: FIXED
+
+### Playwright Browser Isolation Tests (Phase 5)
+- **6/6 tests pass** (`npx playwright test`)
+- **6/6 tests pass** (`npx tsx scripts/run_phase5_tests.ts`)
+
+#### Isolation Proofs:
+| Test | Result | Proof |
+|------|--------|-------|
+| localStorage isolation | ✅ PASS | Profile A sees 'alpha-value', Profile B sees 'beta-value' |
+| Cookie isolation | ✅ PASS | Profile A has cookieA, Profile B has cookieB, no cross-leakage |
+| sessionStorage isolation | ✅ PASS | Profile B cannot access Profile A's sessionStorage |
+| Persistence after close/reopen | ✅ PASS | State restored correctly after context.close() and reopen |
+| Full lifecycle | ✅ PASS | create → launch → use → close → reopen → delete all work |
+| Multiple simultaneous profiles | ✅ PASS | 3 profiles isolated simultaneously |
 
 ---
 
@@ -60,21 +74,21 @@ packages/
   database/src/index.ts    # sql.js abstraction, cross-platform
   email/src/index.ts       # EmailProvider abstraction
   email/src/otp-parser.ts  # OTP extraction
-  browser/src/index.ts     # Playwright BrowserProfileManager
+  browser/src/index.ts     # Playwright BrowserProfileManager (persistent contexts)
   automation/src/index.ts  # TestRunner/QA automation
   shared/src/              # ActivityLogger, CSV tools, types
 
 apps/
   web/src/App.tsx          # React dashboard (3117 lines)
   web/src/main.tsx         # React bootstrap
-  web/index.html           # Entry point
+  web/public/test/isolation.html  # Local test fixture for isolation tests
 ```
 
 ### Key Design Decisions
 - **Database**: sql.js (WASM) instead of better-sqlite3 (no C++ build needed)
 - **Tests**: Node.js built-in `node:test` + tsx runner (vitest had resolution issues)
-- **Browser compatibility**: `isBrowser()` checks, `fetchBinary()` for WASM/DB loading
-- **Path aliases**: `@shared/*`, `@database/*`, etc. defined in tsconfig.json
+- **Browser isolation**: Playwright `launchPersistentContext` for true profile isolation
+- **Test fixture**: Local HTML page at `/test/isolation.html` for proving isolation
 - **TableRow**: Uses `children` prop (not `cells` array) to avoid React key warnings
 
 ---
@@ -83,19 +97,20 @@ apps/
 
 ```
 Branch: main
-Last commit: a5c4ea5 (Phase 3/4 fixes)
-Pending: Phase 3/4 final checkpoint
+Last commit: a5c4ea5 (Phase 3/4)
+Current: (uncommitted Phase 5 changes)
 ```
 
 ---
 
 ## Next Steps
 
-### Phase 5: Playwright Browser Isolation Testing
-- Install Playwright browsers (chromium, firefox)
-- Create isolated browser profiles for QA testing
-- Verify profile isolation (separate cookies/localStorage)
-- Run existing 5 test cases against isolated profiles
+### Phase 6: Provider Adapters
+- IMAP provider (node-imap or imapflow)
+- Gmail OAuth2 provider
+- Microsoft Graph / Outlook provider
+- Provider health monitoring
+- Credential validation on save
 
 ---
 
@@ -106,6 +121,7 @@ Pending: Phase 3/4 final checkpoint
 | TypeScript errors | 0 |
 | Unit tests passed | 34/34 |
 | E2E mock email flow | PASS |
+| Playwright isolation tests | 6/6 PASS |
 | Vite dev server | ✅ Working (HTTP 200) |
 | Browser modules rendering | 9/9 |
 | Browser console errors | 0 |

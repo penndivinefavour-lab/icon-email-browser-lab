@@ -6,7 +6,7 @@ A local-first desktop application for developers, QA engineers, and researchers 
 
 ---
 
-## Done (Phase 1-2)
+## Done (Phase 1-5)
 
 - [x] Project initialization (npm, TypeScript, Vite, vitest)
 - [x] SQLite database layer with sql.js (10 migrations)
@@ -21,8 +21,8 @@ A local-first desktop application for developers, QA engineers, and researchers 
 - [x] Settings key-value store
 - [x] Mock email provider (fully functional)
 - [x] OTP parser with configurable patterns
-- [x] Browser profile manager (Playwright integration)
-- [x] Test runner with 5 built-in test cases
+- [x] Browser profile manager (Playwright integration, persistent contexts)
+- [x] Test runner with 5 built-in test cases + Phase 5 isolation tests
 - [x] CSV import/export utilities
 - [x] Test identity generation for QA
 - [x] Activity logger with structured events
@@ -31,6 +31,16 @@ A local-first desktop application for developers, QA engineers, and researchers 
 - [x] All 9 dashboard modules wired
 - [x] Environment configuration (.env.example)
 - [x] Documentation (README, ARCHITECTURE, DEVELOPMENT, SECURITY)
+- [x] React key prop warning fix (TableRow children refactor)
+- [x] Vite dev server path alias resolution
+- [x] Local test fixture page for isolation testing
+- [x] Playwright browser isolation test suite (6 tests)
+- [x] Phase 5: Cross-profile localStorage isolation (verified)
+- [x] Phase 5: Cross-profile cookie isolation (verified)
+- [x] Phase 5: Cross-profile sessionStorage isolation (verified)
+- [x] Phase 5: Persistence within profile after close/reopen (verified)
+- [x] Phase 5: Full lifecycle — create, launch, use, close, reopen, delete (verified)
+- [x] Phase 5: Multiple simultaneous isolated profiles (verified — 3 profiles)
 
 ---
 

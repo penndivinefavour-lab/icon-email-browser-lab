@@ -1,18 +1,20 @@
 # ICON Email & Browser Lab — Project Status
 
-**Updated**: September 29, 2026
+**Updated**: September 30, 2026
 
 ---
 
-## Current Phase: Phase 5 COMPLETE ✅
+## Current Phase: Phase 6 Research COMPLETE 🔍
 
-All phases through Phase 5 are complete and verified:
+All phases through Phase 5 are complete and verified. Phase 6 research document created.
+
 - ✅ Phase 1: Foundation (database, email, browser, automation packages)
 - ✅ Phase 2: Core Data Model (CRUD operations, seed data)
 - ✅ Phase 3a: Database browser compatibility refactor (sql.js WASM)
 - ✅ Phase 3b: Vite dev server UI rendering (path alias resolution fixed)
 - ✅ Phase 4: Mock Email E2E verification (full OTP flow working)
 - ✅ Phase 5: Playwright Browser Isolation Testing (6/6 tests pass)
+- ✅ Phase 6 Research: Provider adapter architecture documented in PHASE6_PROVIDER_RESEARCH.md
 
 ---
 
@@ -105,12 +107,13 @@ Current: (uncommitted Phase 5 changes)
 
 ## Next Steps
 
-### Phase 6: Provider Adapters
-- IMAP provider (node-imap or imapflow)
-- Gmail OAuth2 provider
-- Microsoft Graph / Outlook provider
-- Provider health monitoring
-- Credential validation on save
+### Phase 6: Provider Adapters (Research Complete)
+- **Library decision**: `imapflow` for IMAP (node-imap abandoned March 2025)
+- **Gmail**: Direct REST API calls with OAuth2 PKCE (`gmail.readonly` scope — Restricted tier)
+- **Outlook**: Direct Microsoft Graph REST calls with OAuth2 (`Mail.Read` + `offline_access`)
+- **Schema migration planned**: 11th migration adding OAuth columns to `email_accounts`
+- **No SDKs used** — all providers use direct fetch() to minimize dependencies
+- **Full architecture spec**: See `PHASE6_PROVIDER_RESEARCH.md`
 
 ---
 

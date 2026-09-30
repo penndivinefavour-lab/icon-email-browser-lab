@@ -2,15 +2,36 @@
  * Vite Plugin: Browser Profile API
  *
  * Provides REST API endpoints for the UI to interact with Playwright.
- * This is a local-only middleware for the Vite dev server.
+ * Mounted directly on the underlying Node HTTP server so it runs BEFORE Vite's
+ * internal handlers, which otherwise swallow any request that doesn't match a
+ * known Vite virtual module URL.
  */
 
 import type { Plugin } from 'vite';
-import { getBrowserProfileManager } from '../../packages/browser/src/index';
-import { getDatabase } from '../../packages/database/src/index';
+import { getBrowserProfileManager } from './packages/browser/src/index';
+import { getDatabase, ensureDbInitialized } from './packages/database/src/index';
 import { randomUUID } from 'crypto';
 import path from 'path';
 import fs from 'fs';
+
+const PLUGIN_ROOT = path.resolve(__dirname);
+
+const JSON_HEADERS = { 'Content-Type': 'application/json' };
+
+function send(res: import('node:http').ServerResponse, status: number, body: unknown): void {
+  res.statusCode = status;
+  for (const [k, v] of Object.entries(JSON_HEADERS)) res.setHeader(k, v);
+  res.end(JSON.stringify(body));
+}
+
+function readBody(req: import('node:http').IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => chunks.push(chunk));
+    req.on('end', () => resolve(Buffer.concat(chunks).toString()));
+    req.on('error', reject);
+  });
+}
 
 export function browserProfileApi(): Plugin {
   return {
@@ -19,133 +40,92 @@ export function browserProfileApi(): Plugin {
       const manager = getBrowserProfileManager(
         path.join(process.cwd(), 'data', 'browser-profiles')
       );
+      const db = getDatabase();
+      if (!db.initialized) db.initialize().catch(console.error);
 
-      // GET /api/profiles — list all profiles
-      server.middlewares.use('/api/profiles', (req, res) => {
-        if (req.method === 'GET') {
-          const db = getDatabase();
-          const profiles = db.getAllBrowserProfiles();
-          res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify(profiles));
-        } else if (req.method === 'POST') {
-          let body = '';
-          req.on('data', (chunk) => (body += chunk));
-          req.on('end', () => {
-            try {
-              const { name, browser } = JSON.parse(body);
-              const id = randomUUID().slice(0, 8);
-              const profile = manager.createProfile({
-                id,
-                name: name || `Profile ${id}`,
-                browser: browser || 'chromium',
-              });
+      // Mount on the raw HTTP server so it fires before Vite's handler.
+      const onRequest = (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => {
+        const url = new URL(req.url ?? '/', `http://${req.headers.host}`);
+        const pathname = url.pathname;
 
-              // Also create in database
-              const db = getDatabase();
-              db.createBrowserProfile({ name: profile.name, browser: profile.browser });
-
-              res.setHeader('Content-Type', 'application/json');
-              res.end(JSON.stringify(profile));
-            } catch (err: any) {
-              res.statusCode = 400;
-              res.end(JSON.stringify({ error: err.message }));
-            }
-          });
+        // ── /api/profiles ──────────────────────────────────────────────
+        if (pathname === '/api/profiles') {
+          if (req.method === 'GET') {
+            return send(res, 200, db.getAllBrowserProfiles());
+          }
+          if (req.method === 'POST') {
+            readBody(req).then((body) => {
+              try {
+                const { name, browser } = JSON.parse(body);
+                const id = randomUUID().slice(0, 8);
+                const profile = manager.createProfile({ id, name: name || `Profile ${id}`, browser: browser || 'chromium' });
+                db.createBrowserProfile({ name: profile.name, browser: profile.browser });
+                return send(res, 201, profile);
+              } catch (err: any) {
+                return send(res, 400, { error: err.message });
+              }
+            });
+            return;
+          }
+          return send(res, 405, { error: 'Method not allowed' });
         }
-      });
 
-      // POST /api/profiles/:id/launch — launch a profile
-      server.middlewares.use('/api/profiles', (req, res) => {
-        const match = req.url?.match(/^\/([^/]+)\/launch$/);
-        if (match && req.method === 'POST') {
-          const profileId = match[1];
+        // ── /api/profiles/:id/launch ───────────────────────────────────
+        const launchMatch = pathname.match(/^\/api\/profiles\/([^/]+)\/launch$/);
+        if (launchMatch && req.method === 'POST') {
+          const profileId = launchMatch[1];
           manager.launchProfile(profileId)
             .then((session) => {
-              // Record session in database
-              const db = getDatabase();
-              const sessionRecord = db.createSession({
-                profile_id: profileId,
-                status: 'active',
-              });
-
-              res.setHeader('Content-Type', 'application/json');
-              res.end(JSON.stringify({ session, dbSession: sessionRecord }));
+              const sessionRecord = db.createSession({ profile_id: profileId, status: 'active' });
+              return send(res, 200, { session, dbSession: sessionRecord });
             })
-            .catch((err: any) => {
-              res.statusCode = 500;
-              res.end(JSON.stringify({ error: err.message }));
-            });
+            .catch((err: any) => send(res, 500, { error: err.message }));
+          return;
         }
 
-        // POST /api/profiles/:id/close — close a profile
-        const closeMatch = req.url?.match(/^\/([^/]+)\/close$/);
+        // ── /api/profiles/:id/close ────────────────────────────────────
+        const closeMatch = pathname.match(/^\/api\/profiles\/([^/]+)\/close$/);
         if (closeMatch && req.method === 'POST') {
           const profileId = closeMatch[1];
           manager.closeSession(profileId)
             .then(() => {
-              const db = getDatabase();
-              const activeSession = db.getActiveSessions().find(
-                (s) => s.profile_id === profileId
-              );
-              if (activeSession) {
-                db.endSession(activeSession.id);
-              }
-              res.setHeader('Content-Type', 'application/json');
-              res.end(JSON.stringify({ success: true }));
+              const activeSession = db.getActiveSessions().find((s) => s.profile_id === profileId);
+              if (activeSession) db.endSession(activeSession.id);
+              return send(res, 200, { success: true });
             })
-            .catch((err: any) => {
-              res.statusCode = 500;
-              res.end(JSON.stringify({ error: err.message }));
-            });
+            .catch((err: any) => send(res, 500, { error: err.message }));
+          return;
         }
 
-        // DELETE /api/profiles/:id — delete a profile
-        const deleteMatch = req.url?.match(/^\/([^/]+)$/);
+        // ── /api/profiles/:id ──────────────────────────────────────────
+        const deleteMatch = pathname.match(/^\/api\/profiles\/([^/]+)$/);
         if (deleteMatch && req.method === 'DELETE') {
           const profileId = deleteMatch[1];
           const success = manager.deleteProfile(profileId);
-          if (success) {
-            const db = getDatabase();
-            db.deleteBrowserProfile(profileId);
+          if (success) db.deleteBrowserProfile(profileId);
+          return send(res, 200, { success });
+        }
+
+        // ── /api/sessions ──────────────────────────────────────────────
+        if (pathname === '/api/sessions' && req.method === 'GET') {
+          return send(res, 200, db.getAllSessions());
+        }
+
+        // ── /api/test-runs ─────────────────────────────────────────────
+        if (pathname === '/api/test-runs') {
+          if (req.method === 'GET') return send(res, 200, db.getAllTestRuns());
+          const runMatch = pathname.match(/^\/api\/test-runs\/([^/]+)\/run$/);
+          if (runMatch && req.method === 'POST') {
+            const run = db.getTestRunById(runMatch[1]);
+            return send(res, 200, run ?? { error: 'Not found' });
           }
-          res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify({ success }));
+          return send(res, 405, { error: 'Method not allowed' });
         }
-      });
 
-      // GET /api/sessions — list sessions
-      server.middlewares.use('/api/sessions', (req, res) => {
-        if (req.method === 'GET') {
-          const db = getDatabase();
-          const sessions = db.getAllSessions();
-          res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify(sessions));
-        }
-      });
+        // Not our route — let Vite handle it
+      };
 
-      // GET /api/test-runs — list test runs
-      server.middlewares.use('/api/test-runs', (req, res) => {
-        if (req.method === 'GET') {
-          const db = getDatabase();
-          const runs = db.getAllTestRuns();
-          res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify(runs));
-        }
-      });
-
-      // POST /api/test-runs/:id/run — run a test
-      server.middlewares.use('/api/test-runs', (req, res) => {
-        const match = req.url?.match(/^\/([^/]+)\/run$/);
-        if (match && req.method === 'POST') {
-          const runId = match[1];
-          // This would trigger a test run
-          // For now, just return the run info
-          const db = getDatabase();
-          const run = db.getTestRunById(runId);
-          res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify(run));
-        }
-      });
+      server.httpServer?.on('request', onRequest);
     },
   };
 }

@@ -260,6 +260,42 @@ const statusBgColors: Record<string, string> = {
   inactive: 'rgba(107, 114, 128, 0.12)',
 };
 
+/** Shared styles for the email account controls (Phase 6a). */
+const smallActionStyle: React.CSSProperties = {
+  padding: '6px 12px',
+  background: 'rgba(255,255,255,0.05)',
+  color: 'rgba(255,255,255,0.7)',
+  border: '1px solid rgba(107, 33, 168, 0.2)',
+  borderRadius: '6px',
+  fontFamily: "'Poppins', sans-serif",
+  fontSize: '12px',
+  fontWeight: 500,
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+};
+
+const fieldLabelStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '5px',
+  fontSize: '11px',
+  color: 'rgba(255,255,255,0.4)',
+  textTransform: 'uppercase',
+  letterSpacing: '0.04em',
+};
+
+const fieldStyle: React.CSSProperties = {
+  padding: '7px 10px',
+  background: 'rgba(15, 21, 37, 0.6)',
+  border: '1px solid rgba(107, 33, 168, 0.2)',
+  borderRadius: '6px',
+  color: '#FFFFFF',
+  fontFamily: "'Poppins', sans-serif",
+  fontSize: '13px',
+  textTransform: 'none',
+  letterSpacing: 'normal',
+};
+
 function statusBadge(status: string): React.ReactNode {
   const color = statusColors[status.toLowerCase()] || '#6B7280';
   const bg = statusBgColors[status.toLowerCase()] || 'rgba(107, 114, 128, 0.12)';
@@ -416,6 +452,25 @@ function App(): React.ReactElement {
   const [accounts, setAccounts] = useState<any[]>([]);
   const [messages, setMessages] = useState<any[]>([]);
 
+  // ── Email provider management (Phase 6a) ─────────────────────────────
+  // Account views come from the service and are redacted by construction:
+  // `hasCredentials` and `maskedSecret` are safe to render, and no component
+  // in this app ever receives a plaintext password.
+  const [showAddAccount, setShowAddAccount] = useState(false);
+  const [accountBusy, setAccountBusy] = useState(false);
+  const [accountError, setAccountError] = useState<string | null>(null);
+  const [lastTestResult, setLastTestResult] = useState<Record<string, any> | null>(null);
+  const [newAccount, setNewAccount] = useState({
+    identityId: '',
+    providerType: 'mock' as 'mock' | 'imap',
+    host: '',
+    port: '993',
+    user: '',
+    password: '',
+    security: 'tls' as 'tls' | 'starttls' | 'none',
+    mailbox: 'INBOX',
+  });
+
   // Modal state
   const [showCreateIdentity, setShowCreateIdentity] = useState(false);
   const [showCreateProfile, setShowCreateProfile] = useState(false);
@@ -460,11 +515,13 @@ function App(): React.ReactElement {
     }
     setVerificationCodes(allCodes);
 
-    // Load accounts and messages for the first identity that has an account
+    // Load accounts and messages for the first identity that has an account.
+    // Accounts come from the provider API (redacted service views), not from a
+    // direct database read, so a plaintext credential can never reach the UI.
+    void loadAccounts();
     for (const id of freshIdentities) {
       const account = database.getEmailAccountsByIdentity(id.id);
       if (account && account.length > 0) {
-        setAccounts(account);
         setMessages(database.getMessagesByAccount(account[0].id));
         break;
       }
@@ -473,6 +530,101 @@ function App(): React.ReactElement {
 
   function refreshData() {
     if (db) loadData(db);
+  }
+
+  // ── Email provider API helpers ───────────────────────────────────────
+  // The UI goes through the dev-server API rather than the database directly,
+  // so the credential redaction rules in EmailAccountService are the only path
+  // a rendered value can take. A failed call surfaces a safe message only.
+
+  async function loadAccounts() {
+    try {
+      const res = await fetch('/api/email/accounts');
+      if (!res.ok) return;
+      setAccounts(await res.json());
+    } catch {
+      setAccountError('Could not reach the local email API.');
+    }
+  }
+
+  async function createEmailAccount() {
+    setAccountBusy(true);
+    setAccountError(null);
+    try {
+      const body: Record<string, unknown> = {
+        identityId: newAccount.identityId || identities[0]?.id,
+        providerType: newAccount.providerType,
+        config: {
+          mailbox: newAccount.mailbox,
+          ...(newAccount.providerType === 'imap'
+            ? {
+                host: newAccount.host,
+                port: Number(newAccount.port) || 993,
+                user: newAccount.user,
+                security: newAccount.security,
+                authMethod: 'password',
+              }
+            : {}),
+        },
+        ...(newAccount.providerType === 'imap' ? { password: newAccount.password } : {}),
+      };
+      const res = await fetch('/api/email/accounts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setAccountError(data.error ?? 'Could not save the account.');
+      } else {
+        setShowAddAccount(false);
+        // Clear the password from component state the moment it is stored.
+        setNewAccount((a) => ({ ...a, password: '' }));
+        await loadAccounts();
+        refreshData();
+      }
+    } catch {
+      setAccountError('Could not reach the local email API.');
+    } finally {
+      setAccountBusy(false);
+    }
+  }
+
+  async function testAccountConnection(accountId: string) {
+    setAccountBusy(true);
+    setAccountError(null);
+    try {
+      const res = await fetch(`/api/email/accounts/${accountId}/test`, { method: 'POST' });
+      const data = await res.json();
+      setLastTestResult({ accountId, ...data });
+      await loadAccounts();
+    } catch {
+      setAccountError('Could not reach the local email API.');
+    } finally {
+      setAccountBusy(false);
+    }
+  }
+
+  async function fetchAccountMessages(accountId: string) {
+    setAccountBusy(true);
+    setAccountError(null);
+    try {
+      const res = await fetch(`/api/email/accounts/${accountId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ limit: 25 }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setAccountError(data.error ?? 'Could not fetch messages.');
+      } else {
+        refreshData();
+      }
+    } catch {
+      setAccountError('Could not reach the local email API.');
+    } finally {
+      setAccountBusy(false);
+    }
   }
 
   async function createIdentity() {
@@ -1849,14 +2001,282 @@ function App(): React.ReactElement {
           {/* ─── Inbox Manager ─── */}
           {activeTab === 'inbox' && (
             <>
-              <div style={{ marginBottom: '20px' }}>
-                <h1 style={{ fontSize: '24px', fontWeight: 700, color: '#FFFFFF', margin: '0 0 4px 0' }}>
-                  Inbox Manager
-                </h1>
-                <p style={{ fontSize: '13px', color: 'rgba(255,255,255,0.4)', margin: 0 }}>
-                  View messages from authorized email accounts
-                </p>
+              <div style={{ marginBottom: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div>
+                  <h1 style={{ fontSize: '24px', fontWeight: 700, color: '#FFFFFF', margin: '0 0 4px 0' }}>
+                    Inbox Manager
+                  </h1>
+                  <p style={{ fontSize: '13px', color: 'rgba(255,255,255,0.4)', margin: 0 }}>
+                    View messages from authorized email accounts
+                  </p>
+                </div>
+                <button
+                  onClick={() => setShowAddAccount(true)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '8px 14px',
+                    background: 'linear-gradient(135deg, #6B21A8, #7B3EC1)',
+                    color: '#FFFFFF',
+                    border: 'none',
+                    borderRadius: '8px',
+                    fontFamily: "'Poppins', sans-serif",
+                    fontSize: '13px',
+                    fontWeight: 500,
+                    cursor: 'pointer',
+                  }}
+                >
+                  <IconPlus className="w-4 h-4" />
+                  Add Email Account
+                </button>
               </div>
+
+              {/* Provider accounts: status, connection test, fetch */}
+              {accounts.length > 0 && (
+                <div
+                  data-testid="email-accounts"
+                  style={{
+                    background: 'rgba(30, 30, 46, 0.4)',
+                    border: '1px solid rgba(107, 33, 168, 0.15)',
+                    borderRadius: '12px',
+                    marginBottom: '16px',
+                    overflow: 'hidden',
+                  }}
+                >
+                  <div
+                    style={{
+                      padding: '12px 16px',
+                      backgroundColor: 'rgba(15, 21, 37, 0.3)',
+                      borderBottom: '1px solid rgba(107, 33, 168, 0.12)',
+                      fontSize: '12px',
+                      color: 'rgba(255,255,255,0.45)',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                    }}
+                  >
+                    <span style={{ fontWeight: 600, color: 'rgba(255,255,255,0.7)' }}>Email Accounts</span>
+                    <span>{accounts.length} configured</span>
+                  </div>
+
+                  {accounts.map((account: any) => {
+                    const health = account.health ?? {};
+                    const status = health.connectionStatus ?? 'disconnected';
+                    const isConnected = status === 'connected';
+                    const isError = status === 'error';
+                    const test = lastTestResult?.accountId === account.id ? lastTestResult : null;
+                    return (
+                      <div
+                        key={account.id}
+                        style={{
+                          padding: '12px 16px',
+                          borderBottom: '1px solid rgba(107, 33, 168, 0.06)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '12px',
+                          flexWrap: 'wrap',
+                        }}
+                      >
+                        <div style={{ flex: 1, minWidth: '220px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span
+                              style={{
+                                fontSize: '11px',
+                                padding: '2px 8px',
+                                borderRadius: '4px',
+                                background: 'rgba(107, 33, 168, 0.15)',
+                                color: '#C4B5FD',
+                                fontWeight: 600,
+                                textTransform: 'uppercase',
+                              }}
+                            >
+                              {account.provider_type}
+                            </span>
+                            <span
+                              style={{
+                                fontSize: '12px',
+                                color: isConnected ? '#34D399' : isError ? '#F87171' : 'rgba(255,255,255,0.4)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '5px',
+                              }}
+                            >
+                              <span
+                                style={{
+                                  width: '6px',
+                                  height: '6px',
+                                  borderRadius: '50%',
+                                  background: isConnected ? '#34D399' : isError ? '#F87171' : 'rgba(255,255,255,0.25)',
+                                }}
+                              />
+                              {status}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.45)', marginTop: '4px' }}>
+                            {account.config?.user ?? account.config?.host ?? 'local mock account'}
+                            {account.config?.host ? ` · ${account.config.host}:${account.config.port ?? 993}` : ''}
+                          </div>
+                          <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)', marginTop: '3px' }}>
+                            {/* Only a boolean and a mask are ever available here. */}
+                            {account.hasCredentials ? `Password stored (${account.maskedSecret})` : 'No credentials stored'}
+                            {health.lastCheckedAt ? ` · checked ${formatDate(health.lastCheckedAt)}` : ''}
+                            {health.latencyMs != null ? ` · ${health.latencyMs}ms` : ''}
+                            {health.unreadCount != null ? ` · ${health.unreadCount} unread` : ''}
+                          </div>
+                          {isError && health.lastError && (
+                            <div style={{ fontSize: '11px', color: '#F87171', marginTop: '3px' }}>
+                              {health.lastError}
+                              {health.lastErrorCode ? ` (${health.lastErrorCode})` : ''}
+                            </div>
+                          )}
+                          {test && !test.success && (
+                            <div style={{ fontSize: '11px', color: '#FBBF24', marginTop: '3px' }}>
+                              Last test failed: {test.error}
+                            </div>
+                          )}
+                        </div>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <button
+                            onClick={() => testAccountConnection(account.id)}
+                            disabled={accountBusy}
+                            style={smallActionStyle}
+                          >
+                            Test Connection
+                          </button>
+                          <button
+                            onClick={() => fetchAccountMessages(account.id)}
+                            disabled={accountBusy}
+                            style={{ ...smallActionStyle, background: 'rgba(59, 130, 246, 0.15)', color: '#93C5FD' }}
+                          >
+                            Fetch Messages
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {accountError && (
+                    <div style={{ padding: '10px 16px', fontSize: '12px', color: '#F87171' }}>{accountError}</div>
+                  )}
+                </div>
+              )}
+
+              {showAddAccount && (
+                <div
+                  data-testid="add-email-account"
+                  style={{
+                    background: 'rgba(30, 30, 46, 0.4)',
+                    border: '1px solid rgba(107, 33, 168, 0.2)',
+                    borderRadius: '12px',
+                    padding: '16px',
+                    marginBottom: '16px',
+                  }}
+                >
+                  <div style={{ fontSize: '14px', fontWeight: 600, color: '#FFFFFF', marginBottom: '12px' }}>
+                    Add an authorized email account
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px' }}>
+                    <label style={fieldLabelStyle}>
+                      Identity
+                      <select
+                        value={newAccount.identityId}
+                        onChange={(e) => setNewAccount({ ...newAccount, identityId: e.target.value })}
+                        style={fieldStyle}
+                      >
+                        <option value="">First available identity</option>
+                        {identities.map((i) => (
+                          <option key={i.id} value={i.id}>{i.email}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label style={fieldLabelStyle}>
+                      Provider
+                      <select
+                        value={newAccount.providerType}
+                        onChange={(e) => setNewAccount({ ...newAccount, providerType: e.target.value as 'mock' | 'imap' })}
+                        style={fieldStyle}
+                      >
+                        <option value="mock">Mock (local, no credentials)</option>
+                        <option value="imap">IMAP (imapflow)</option>
+                      </select>
+                    </label>
+                    {newAccount.providerType === 'imap' && (
+                      <>
+                        <label style={fieldLabelStyle}>
+                          Host
+                          <input
+                            value={newAccount.host}
+                            onChange={(e) => setNewAccount({ ...newAccount, host: e.target.value })}
+                            placeholder="imap.example.com"
+                            style={fieldStyle}
+                          />
+                        </label>
+                        <label style={fieldLabelStyle}>
+                          Port
+                          <input
+                            value={newAccount.port}
+                            onChange={(e) => setNewAccount({ ...newAccount, port: e.target.value })}
+                            style={fieldStyle}
+                          />
+                        </label>
+                        <label style={fieldLabelStyle}>
+                          Username
+                          <input
+                            value={newAccount.user}
+                            onChange={(e) => setNewAccount({ ...newAccount, user: e.target.value })}
+                            placeholder="you@example.com"
+                            style={fieldStyle}
+                          />
+                        </label>
+                        <label style={fieldLabelStyle}>
+                          Password or app password
+                          <input
+                            type="password"
+                            value={newAccount.password}
+                            onChange={(e) => setNewAccount({ ...newAccount, password: e.target.value })}
+                            placeholder="Stored separately, never shown again"
+                            style={fieldStyle}
+                          />
+                        </label>
+                        <label style={fieldLabelStyle}>
+                          Security
+                          <select
+                            value={newAccount.security}
+                            onChange={(e) => setNewAccount({ ...newAccount, security: e.target.value as 'tls' | 'starttls' | 'none' })}
+                            style={fieldStyle}
+                          >
+                            <option value="tls">TLS (IMAPS, port 993)</option>
+                            <option value="starttls">STARTTLS (port 143)</option>
+                            <option value="none">None (localhost only)</option>
+                          </select>
+                        </label>
+                        <label style={fieldLabelStyle}>
+                          Folder
+                          <input
+                            value={newAccount.mailbox}
+                            onChange={(e) => setNewAccount({ ...newAccount, mailbox: e.target.value })}
+                            style={fieldStyle}
+                          />
+                        </label>
+                      </>
+                    )}
+                  </div>
+
+                  {accountError && (
+                    <div style={{ fontSize: '12px', color: '#F87171', marginTop: '10px' }}>{accountError}</div>
+                  )}
+
+                  <div style={{ display: 'flex', gap: '10px', marginTop: '14px' }}>
+                    <button onClick={createEmailAccount} disabled={accountBusy} style={{ ...smallActionStyle, background: 'linear-gradient(135deg, #6B21A8, #7B3EC1)', color: '#FFFFFF' }}>
+                      {accountBusy ? 'Saving…' : 'Save Account'}
+                    </button>
+                    <button onClick={() => { setShowAddAccount(false); setAccountError(null); }} style={smallActionStyle}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {accounts.length === 0 ? (
                 <div
@@ -1876,7 +2296,8 @@ function App(): React.ReactElement {
                     No email accounts configured
                   </div>
                   <div style={{ fontSize: '13px' }}>
-                    The mock email provider is active. Create an identity with an email account to see messages.
+                    No email accounts configured. Add one to read an authorized mailbox — the mock provider works
+                    offline with no credentials.
                   </div>
                   <div
                     style={{
@@ -3010,7 +3431,7 @@ function App(): React.ReactElement {
                 {[
                   { section: 'General', items: ['Application Name', 'Environment', 'Port'] },
                   { section: 'Database', items: ['Path', 'Type: SQLite (sql.js)', 'WAL Mode'] },
-                  { section: 'Email Providers', items: ['Mock Provider (active)', 'IMAP (not configured)', 'Gmail (not configured)', 'Outlook (not configured)'] },
+                  { section: 'Email Providers', items: ['Mock Provider (active)', 'IMAP (imapflow 2.1.2 — ready)', 'Gmail (Phase 6b)', 'Outlook (Phase 6c)'] },
                   { section: 'Browser', items: ['Default: Chromium', 'Profiles Directory', 'Playwright 1.62.1'] },
                   { section: 'Automation', items: ['Test Timeout', 'Screenshot on Failure', 'Screenshots Directory'] },
                   { section: 'Data Storage', items: ['Local SQLite Database', 'Browser Profile Storage', 'Test Screenshots'] },

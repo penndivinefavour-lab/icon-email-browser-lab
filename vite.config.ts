@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { resolve } from 'path';
 import { browserProfileApi } from './vite-plugin-browser-api';
+import { emailProviderApi } from './vite-plugin-email-api';
 
 const ROOT = 'D:/HERMES AGENT/ICON Email Browser Lab';
 
@@ -10,6 +11,7 @@ export default defineConfig({
   plugins: [
     react(),
     browserProfileApi(),
+    emailProviderApi(),
   ],
   resolve: {
     alias: {

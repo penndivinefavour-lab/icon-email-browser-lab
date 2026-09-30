@@ -123,6 +123,8 @@ function rowToSetting(r: (string | number | null)[]): Setting { return { key: r[
 function rowToEmailAccount(r: (string | number | null)[]): EmailAccount {
   return { id: r[0] as string, identity_id: r[1] as string, provider_type: r[2] as string, config: r[3] as string, is_active: r[4] as number, created_at: r[5] as string, last_synced_at: r[6] as string | null };
 }
+function rowToEmailCredential(r: (string | number | null)[]): EmailCredential { return { credential_ref: r[0] as string, account_id: r[1] as string, secret_kind: r[2] as string, secret_value: r[3] as string, updated_at: r[4] as string }; }
+function rowToEmailAccountHealth(r: (string | number | null)[]): EmailAccountHealth { return { account_id: r[0] as string, connection_status: (r[1] as string) ?? 'disconnected', last_error: r[2] as string | null, last_error_code: r[3] as string | null, last_checked_at: r[4] as string | null, latency_ms: r[5] as number | null, unread_count: r[6] as number | null, folder_count: r[7] as number | null }; }
 function rowToMessage(r: (string | number | null)[]): Message {
   return { id: r[0] as string, account_id: r[1] as string, message_id_external: r[2] as string | null, subject: r[3] as string, sender: r[4] as string, recipient: r[5] as string, body: r[6] as string | null, body_html: r[7] as string | null, received_at: r[8] as string, is_read: r[9] as number, attachments: r[10] as string, raw_headers: r[11] as string | null };
 }
@@ -143,6 +145,15 @@ export interface Setting { key: string; value: string; updated_at: string; }
 export interface EmailAccount { id: string; identity_id: string; provider_type: string; config: string; is_active: number; created_at: string; last_synced_at: string | null; }
 export interface Message { id: string; account_id: string; message_id_external: string | null; subject: string; sender: string; recipient: string; body: string | null; body_html: string | null; received_at: string; is_read: number; attachments: string; raw_headers: string | null; }
 export interface VerificationCode { id: string; message_id: string; identity_id: string; sender: string; service_label: string | null; code: string; code_type: string; received_at: string; expires_at: string | null; status: string; notes: string | null; }
+
+/**
+ * A stored provider secret. This row is reachable only through the explicit
+ * credential methods below — ordinary account queries never join it.
+ */
+export interface EmailCredential { credential_ref: string; account_id: string; secret_kind: string; secret_value: string; updated_at: string; }
+
+/** Last known connection health for an account. Contains no secrets. */
+export interface EmailAccountHealth { account_id: string; connection_status: string; last_error: string | null; last_error_code: string | null; last_checked_at: string | null; latency_ms: number | null; unread_count: number | null; folder_count: number | null; }
 
 // ─── Database class ──────────────────────────────────────────────────
 export class Database {
@@ -178,8 +189,15 @@ export class Database {
 
   private runMigrations(): void {
     if (!this.db) throw new Error('DB not initialized');
+    // SQLite ships with foreign key enforcement OFF, which means the
+    // ON DELETE CASCADE declared on email_credentials and email_account_health
+    // would silently never fire — deleting an account would leave its password
+    // orphaned in the database. Enable enforcement before creating any schema.
+    this.db.run(`PRAGMA foreign_keys = ON`);
     this.db.run(`CREATE TABLE IF NOT EXISTS _migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, applied_at TEXT NOT NULL DEFAULT (datetime('now')))`);
-    const sqls = [
+
+    // ── Migration 1: initial schema ────────────────────────────────────
+    const initialSqls = [
       `CREATE TABLE IF NOT EXISTS identities (id TEXT PRIMARY KEY, email TEXT NOT NULL, display_name TEXT, provider TEXT NOT NULL DEFAULT 'other', status TEXT NOT NULL DEFAULT 'available', tags TEXT NOT NULL DEFAULT '', notes TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')), last_used_at TEXT, browser_profile_id TEXT, verification_status TEXT NOT NULL DEFAULT 'unverified', source TEXT NOT NULL DEFAULT 'manual', metadata TEXT NOT NULL DEFAULT '{}')`,
       `CREATE TABLE IF NOT EXISTS email_accounts (id TEXT PRIMARY KEY, identity_id TEXT NOT NULL, provider_type TEXT NOT NULL, config TEXT NOT NULL DEFAULT '{}', is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT (datetime('now')), last_synced_at TEXT, FOREIGN KEY (identity_id) REFERENCES identities(id) ON DELETE CASCADE)`,
       `CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, account_id TEXT NOT NULL, message_id_external TEXT, subject TEXT NOT NULL DEFAULT '', sender TEXT NOT NULL DEFAULT '', recipient TEXT NOT NULL DEFAULT '', body TEXT, body_html TEXT, received_at TEXT NOT NULL DEFAULT (datetime('now')), is_read INTEGER NOT NULL DEFAULT 0, attachments TEXT NOT NULL DEFAULT '{}', raw_headers TEXT, FOREIGN KEY (account_id) REFERENCES email_accounts(id) ON DELETE CASCADE)`,
@@ -191,8 +209,30 @@ export class Database {
       `CREATE TABLE IF NOT EXISTS activity_logs (id TEXT PRIMARY KEY, timestamp TEXT NOT NULL DEFAULT (datetime('now')), action TEXT NOT NULL, actor TEXT, entity_type TEXT NOT NULL, entity_id TEXT, details TEXT NOT NULL DEFAULT '{}', ip_address TEXT, session_id TEXT, user_agent TEXT)`,
       `CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT (datetime('now')))`,
     ];
-    for (const s of sqls) this.db.run(s);
+    for (const s of initialSqls) this.db.run(s);
     this.db.run(`INSERT OR IGNORE INTO _migrations (name, applied_at) VALUES ('initial_schema', datetime('now'))`);
+
+    // ── Migration 2: provider credentials and health (Phase 6a) ────────
+    //
+    // Two changes, both additive so an existing database keeps working:
+    //
+    // 1. `email_credentials` — a separate table for secrets. Deliberately NOT
+    //    columns on `email_accounts`: account rows are returned to the UI and to
+    //    exports wholesale, so a password there would leak by default. Access is
+    //    only ever through explicit methods, and the table cascades on account
+    //    delete so removing an account removes its secret.
+    //
+    // 2. `email_account_health` — last health check, error code, and latency,
+    //    also kept off the account row so a status query stays small and cannot
+    //    accidentally carry provider internals.
+    const providerSqls = [
+      `CREATE TABLE IF NOT EXISTS email_credentials (credential_ref TEXT PRIMARY KEY, account_id TEXT NOT NULL UNIQUE, secret_kind TEXT NOT NULL DEFAULT 'password', secret_value TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT (datetime('now')), FOREIGN KEY (account_id) REFERENCES email_accounts(id) ON DELETE CASCADE)`,
+      `CREATE TABLE IF NOT EXISTS email_account_health (account_id TEXT PRIMARY KEY, connection_status TEXT NOT NULL DEFAULT 'disconnected', last_error TEXT, last_error_code TEXT, last_checked_at TEXT, latency_ms INTEGER, unread_count INTEGER, folder_count INTEGER, FOREIGN KEY (account_id) REFERENCES email_accounts(id) ON DELETE CASCADE)`,
+      `CREATE INDEX IF NOT EXISTS idx_email_credentials_account ON email_credentials(account_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_email_accounts_identity ON email_accounts(identity_id)`,
+    ];
+    for (const s of providerSqls) this.db.run(s);
+    this.db.run(`INSERT OR IGNORE INTO _migrations (name, applied_at) VALUES ('provider_credentials_and_health', datetime('now'))`);
   }
 
   private ensureInit(): void { if (!this.initialized) throw new Error('DB not initialized'); if (!this.db) throw new Error('DB closed'); }
@@ -302,11 +342,101 @@ export class Database {
   getEmailAccountById(id: string): EmailAccount | null { this.ensureInit(); const r = this.db!.exec(`SELECT * FROM email_accounts WHERE id=?`, [id]); return r.length ? rowToEmailAccount(r[0].values[0]) : null; }
   getEmailAccountsByIdentity(identityId: string): EmailAccount[] { this.ensureInit(); const r = this.db!.exec(`SELECT * FROM email_accounts WHERE identity_id=? ORDER BY created_at DESC`, [identityId]); return r[0]?.values.map(rowToEmailAccount) ?? []; }
   getAllEmailAccounts(): EmailAccount[] { this.ensureInit(); const r = this.db!.exec(`SELECT * FROM email_accounts ORDER BY created_at DESC`); return r[0]?.values.map(rowToEmailAccount) ?? []; }
+  /**
+   * Delete an account and everything that hangs off it.
+   *
+   * The child rows are removed explicitly rather than relying on
+   * ON DELETE CASCADE. Cascades are a database-level guarantee that depends on
+   * `PRAGMA foreign_keys` being enabled, and silently leaving a password behind
+   * after an account is removed is not a risk worth taking on that basis.
+   */
+  deleteEmailAccount(id: string): boolean {
+    this.ensureInit();
+    this.db!.run(`DELETE FROM email_credentials WHERE account_id=?`, [id]);
+    this.db!.run(`DELETE FROM email_account_health WHERE account_id=?`, [id]);
+    this.db!.run(`DELETE FROM email_accounts WHERE id=?`, [id]);
+    this.save();
+    return !this.getEmailAccountById(id);
+  }
   updateEmailAccount(id: string, d: Partial<Omit<EmailAccount, 'id' | 'created_at'>>): EmailAccount | null {
     this.ensureInit(); const f: string[] = []; const v: (string | number | null)[] = [];
     if (d.identity_id !== undefined) { f.push('identity_id=?'); v.push(d.identity_id); } if (d.provider_type !== undefined) { f.push('provider_type=?'); v.push(d.provider_type); } if (d.config !== undefined) { f.push('config=?'); v.push(d.config); } if (d.is_active !== undefined) { f.push('is_active=?'); v.push(d.is_active); } if (d.last_synced_at !== undefined) { f.push('last_synced_at=?'); v.push(d.last_synced_at); }
     if (!f.length) return this.getEmailAccountById(id);
     v.push(id); this.db!.run(`UPDATE email_accounts SET ${f.join(',')} WHERE id=?`, v); this.save(); return this.getEmailAccountById(id);
+  }
+
+  // ── Email credentials ───────────────────────────────────────────────────
+  //
+  // These four methods are the only path to a stored secret. They are
+  // intentionally NOT folded into `getAllEmailAccounts()` or any other list
+  // query, so a normal read of accounts cannot surface a password.
+
+  /** Create or replace the secret for an account. */
+  upsertEmailCredential(d: { account_id: string; credential_ref: string; secret_value: string; secret_kind?: string; updated_at?: string }): EmailCredential {
+    this.ensureInit();
+    const now = d.updated_at ?? new Date().toISOString();
+    this.db!.run(
+      `INSERT INTO email_credentials (credential_ref,account_id,secret_kind,secret_value,updated_at) VALUES (?,?,?,?,?)
+       ON CONFLICT(account_id) DO UPDATE SET secret_value=excluded.secret_value, secret_kind=excluded.secret_kind, updated_at=excluded.updated_at`,
+      [d.credential_ref, d.account_id, d.secret_kind ?? 'password', d.secret_value, now]
+    );
+    this.save();
+    return this.getEmailCredentialByAccount(d.account_id)!;
+  }
+
+  getEmailCredentialByAccount(accountId: string): EmailCredential | null {
+    this.ensureInit();
+    const r = this.db!.exec(`SELECT credential_ref,account_id,secret_kind,secret_value,updated_at FROM email_credentials WHERE account_id=?`, [accountId]);
+    return r.length ? rowToEmailCredential(r[0].values[0] as (string | number | null)[]) : null;
+  }
+
+  deleteEmailCredential(accountId: string): boolean {
+    this.ensureInit();
+    this.db!.run(`DELETE FROM email_credentials WHERE account_id=?`, [accountId]);
+    this.save();
+    return !this.getEmailCredentialByAccount(accountId);
+  }
+
+  /** True when a secret exists. Safe to call from list endpoints. */
+  hasEmailCredential(accountId: string): boolean {
+    this.ensureInit();
+    const r = this.db!.exec(`SELECT 1 FROM email_credentials WHERE account_id=? LIMIT 1`, [accountId]);
+    return r.length > 0;
+  }
+
+  // ── Email account health ────────────────────────────────────────────────
+
+  /** Record the outcome of a connection test or health check. */
+  setEmailAccountHealth(accountId: string, d: { connection_status: string; last_error?: string | null; last_error_code?: string | null; last_checked_at?: string | null; latency_ms?: number | null; unread_count?: number | null; folder_count?: number | null }): EmailAccountHealth {
+    this.ensureInit();
+    const now = d.last_checked_at ?? new Date().toISOString();
+    this.db!.run(
+      `INSERT INTO email_account_health (account_id,connection_status,last_error,last_error_code,last_checked_at,latency_ms,unread_count,folder_count)
+       VALUES (?,?,?,?,?,?,?,?)
+       ON CONFLICT(account_id) DO UPDATE SET connection_status=excluded.connection_status, last_error=excluded.last_error, last_error_code=excluded.last_error_code, last_checked_at=excluded.last_checked_at, latency_ms=excluded.latency_ms, unread_count=excluded.unread_count, folder_count=excluded.folder_count`,
+      [accountId, d.connection_status, d.last_error ?? null, d.last_error_code ?? null, now, d.latency_ms ?? null, d.unread_count ?? null, d.folder_count ?? null]
+    );
+    this.save();
+    return this.getEmailAccountHealth(accountId)!;
+  }
+
+  getEmailAccountHealth(accountId: string): EmailAccountHealth | null {
+    this.ensureInit();
+    const r = this.db!.exec(`SELECT account_id,connection_status,last_error,last_error_code,last_checked_at,latency_ms,unread_count,folder_count FROM email_account_health WHERE account_id=?`, [accountId]);
+    return r.length ? rowToEmailAccountHealth(r[0].values[0] as (string | number | null)[]) : null;
+  }
+
+  getAllEmailAccountHealth(): EmailAccountHealth[] {
+    this.ensureInit();
+    const r = this.db!.exec(`SELECT account_id,connection_status,last_error,last_error_code,last_checked_at,latency_ms,unread_count,folder_count FROM email_account_health`);
+    return r[0]?.values.map((row: (string | number | null)[]) => rowToEmailAccountHealth(row)) ?? [];
+  }
+
+  deleteEmailAccountHealth(accountId: string): boolean {
+    this.ensureInit();
+    this.db!.run(`DELETE FROM email_account_health WHERE account_id=?`, [accountId]);
+    this.save();
+    return !this.getEmailAccountHealth(accountId);
   }
 
   // ── Messages ────────────────────────────────────────────────────────
@@ -338,4 +468,12 @@ export class Database {
 
 // ─── Singleton ────────────────────────────────────────────────────────
 let dbInstance: Database | null = null;
-export function getDatabase(): Database { if (!dbInstance) dbInstance = new Database(); return dbInstance; }
+export function getDatabase(): Database {
+  if (!dbInstance) dbInstance = new Database();
+  return dbInstance;
+}
+
+/** Ensure the DB is initialized, lazily on first access. */
+export async function ensureDbInitialized(db: Database): Promise<void> {
+  if (!db.initialized) await db.initialize();
+}

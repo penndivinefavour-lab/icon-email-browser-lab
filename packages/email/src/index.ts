@@ -1,74 +1,75 @@
 /**
  * Email Provider Abstraction Layer
  *
- * Supports multiple email providers through adapters.
- * First implementation includes a MockProvider for local testing.
+ * Public surface of the email package. The shared types and the abstract
+ * `EmailProvider` live in `types.ts`, the MockProvider and the provider factory
+ * live here, and the IMAP adapter lives in `imap-provider.ts`.
+ *
+ * `MockEmailProvider` remains the default development and test path: it is
+ * selected whenever an account's provider type is `mock`, and no real network
+ * call happens unless an account is explicitly configured for a real provider.
  */
 
-export interface EmailProviderConfig {
-  type: 'mock' | 'imap' | 'gmail' | 'outlook';
-  host?: string;
-  port?: number;
-  user?: string;
-  password?: string;
-  clientId?: string;
-  clientSecret?: string;
-  delay?: number; // Simulated delay for mock
-}
+// ── Shared provider types ───────────────────────────────────────────────
+export type {
+  EmailProviderConfig,
+  EmailProviderType,
+  ImapAuthMethod,
+  ImapSecurity,
+  EmailMessage,
+  EmailAttachment,
+  EmailAccountConnection,
+  MailboxInfo,
+  ConnectionTestResult,
+  ProviderStatus,
+} from './types.js';
+export { EmailProvider, describeError } from './types.js';
 
-export interface EmailMessage {
-  id: string;
-  messageIdExternal?: string;
-  subject: string;
-  sender: string;
-  recipient: string;
-  body: string;
-  bodyHtml?: string;
-  receivedAt: Date;
-  isRead: boolean;
-  attachments: EmailAttachment[];
-  rawHeaders?: string;
-}
+// ── Structured errors ───────────────────────────────────────────────────
+export {
+  EmailProviderError,
+  classifyProviderError,
+  scrubSecrets,
+  type EmailProviderErrorCode,
+} from './errors.js';
 
-export interface EmailAttachment {
-  id: string;
-  filename: string;
-  contentType: string;
-  size: number;
-  content?: string;
-}
+// ── Credential storage ──────────────────────────────────────────────────
+export {
+  CredentialStore,
+  toPublicEmailAccount,
+  redactConfig,
+  maskConfig,
+  maskSecret,
+  SECRET_FIELDS,
+  type StoredCredentials,
+  type ResolvedCredentials,
+  type PublicEmailAccount,
+  type SecretField,
+} from './credentials.js';
 
-export interface EmailAccountConnection {
-  accountId: string;
-  identityId: string;
-  providerType: string;
-  config: EmailProviderConfig;
-  isActive: boolean;
-}
+// ── IMAP provider ───────────────────────────────────────────────────────
+export {
+  ImapProvider,
+  normalizeImapMessage,
+  type ImapProviderOptions,
+  type ImapClientLike,
+  type ImapClientFactory,
+  type ImapFetchedMessage,
+} from './imap-provider.js';
 
-export abstract class EmailProvider {
-  protected config: EmailProviderConfig;
-  protected accountId: string;
-  protected identityId: string;
+import {
+  EmailProvider,
+  type EmailMessage,
+  type EmailProviderConfig,
+  type MailboxInfo,
+} from './types.js';
+import { ImapProvider, type ImapClientFactory } from './imap-provider.js';
 
-  constructor(config: EmailProviderConfig, accountId: string, identityId: string) {
-    this.config = config;
-    this.accountId = accountId;
-    this.identityId = identityId;
-  }
-
-  abstract connect(): Promise<boolean>;
-  abstract disconnect(): Promise<void>;
-  abstract fetchMessages(limit?: number, offset?: number): Promise<EmailMessage[]>;
-  abstract searchMessages(query: string): Promise<EmailMessage[]>;
-  abstract markAsRead(messageId: string): Promise<boolean>;
-  abstract getUnreadCount(): Promise<number>;
-
-  getConfig(): EmailProviderConfig {
-    return this.config;
-  }
-}
-
+/**
+ * Mock provider. Used by default for development, seeded data, and every
+ * automated test. It performs no I/O and is the only provider the UI bundle
+ * needs at runtime.
+ */
 export class MockEmailProvider extends EmailProvider {
   private messages: EmailMessage[] = [];
   private messageCounter = 0;
@@ -168,6 +169,14 @@ export class MockEmailProvider extends EmailProvider {
     return this.messages.filter((m) => !m.isRead).length;
   }
 
+  /**
+   * Single-folder view. The Mock provider is inbox-only, so it reports the one
+   * folder it serves rather than pretending to be a real server.
+   */
+  override async listMailboxes(): Promise<MailboxInfo[]> {
+    return [{ path: this.config.mailbox || 'INBOX', delimiter: '.', subscribed: true }];
+  }
+
   // Helper for adding test messages
   addMessage(message: Omit<EmailMessage, 'id'>): EmailMessage {
     const id = `mock-${++this.messageCounter}`;
@@ -185,110 +194,87 @@ export class MockEmailProvider extends EmailProvider {
   }
 }
 
-export class IMAPProvider extends EmailProvider {
-  async connect(): Promise<boolean> {
-    // TODO: Implement IMAP connection using a library like imapflow or node-imap
-    // Requires: host, port, user, password from config
-    console.warn('IMAPProvider not yet implemented');
-    return false;
-  }
-
-  async disconnect(): Promise<void> {
-    // TODO
-  }
-
-  async fetchMessages(limit?: number, offset?: number): Promise<EmailMessage[]> {
-    console.warn('IMAPProvider.fetchMessages not yet implemented');
-    return [];
-  }
-
-  async searchMessages(query: string): Promise<EmailMessage[]> {
-    console.warn('IMAPProvider.searchMessages not yet implemented');
-    return [];
-  }
-
-  async markAsRead(messageId: string): Promise<boolean> {
-    console.warn('IMAPProvider.markAsRead not yet implemented');
-    return false;
-  }
-
-  async getUnreadCount(): Promise<number> {
-    console.warn('IMAPProvider.getUnreadCount not yet implemented');
-    return 0;
-  }
-}
-
+/**
+ * Gmail adapter placeholder. Phase 6b. The OAuth2 consent flow and the REST
+ * calls are deliberately not stubbed out to look functional.
+ */
 export class GmailProvider extends EmailProvider {
+  private unavailable(): never {
+    throw new Error(
+      'The Gmail provider is not implemented yet. It arrives in Phase 6b; use the IMAP provider or the mock provider for now.'
+    );
+  }
   async connect(): Promise<boolean> {
-    // TODO: Implement Gmail API connection using OAuth2
-    // Requires: clientId, clientSecret
-    console.warn('GmailProvider not yet implemented');
-    return false;
+    return this.unavailable();
   }
-
   async disconnect(): Promise<void> {
-    // TODO
+    return this.unavailable();
   }
-
-  async fetchMessages(limit?: number, offset?: number): Promise<EmailMessage[]> {
-    console.warn('GmailProvider.fetchMessages not yet implemented');
-    return [];
+  async fetchMessages(): Promise<EmailMessage[]> {
+    return this.unavailable();
   }
-
-  async searchMessages(query: string): Promise<EmailMessage[]> {
-    console.warn('GmailProvider.searchMessages not yet implemented');
-    return [];
+  async searchMessages(): Promise<EmailMessage[]> {
+    return this.unavailable();
   }
-
-  async markAsRead(messageId: string): Promise<boolean> {
-    console.warn('GmailProvider.markAsRead not yet implemented');
-    return false;
+  async markAsRead(): Promise<boolean> {
+    return this.unavailable();
   }
-
   async getUnreadCount(): Promise<number> {
-    console.warn('GmailProvider.getUnreadCount not yet implemented');
-    return 0;
+    return this.unavailable();
   }
 }
 
+/**
+ * Microsoft Graph adapter placeholder. Phase 6c.
+ */
 export class OutlookProvider extends EmailProvider {
+  private unavailable(): never {
+    throw new Error(
+      'The Outlook provider is not implemented yet. It arrives in Phase 6c; use the IMAP provider or the mock provider for now.'
+    );
+  }
   async connect(): Promise<boolean> {
-    // TODO: Implement Microsoft Graph API connection
-    console.warn('OutlookProvider not yet implemented');
-    return false;
+    return this.unavailable();
   }
-
   async disconnect(): Promise<void> {
-    // TODO
+    return this.unavailable();
   }
-
-  async fetchMessages(limit?: number, offset?: number): Promise<EmailMessage[]> {
-    console.warn('OutlookProvider.fetchMessages not yet implemented');
-    return [];
+  async fetchMessages(): Promise<EmailMessage[]> {
+    return this.unavailable();
   }
-
-  async searchMessages(query: string): Promise<EmailMessage[]> {
-    console.warn('OutlookProvider.searchMessages not yet implemented');
-    return [];
+  async searchMessages(): Promise<EmailMessage[]> {
+    return this.unavailable();
   }
-
-  async markAsRead(messageId: string): Promise<boolean> {
-    console.warn('OutlookProvider.markAsRead not yet implemented');
-    return false;
+  async markAsRead(): Promise<boolean> {
+    return this.unavailable();
   }
-
   async getUnreadCount(): Promise<number> {
-    console.warn('OutlookProvider.getUnreadCount not yet implemented');
-    return 0;
+    return this.unavailable();
   }
 }
 
-export function createProvider(config: EmailProviderConfig, accountId: string, identityId: string): EmailProvider {
+/** Extra construction options, currently only used to inject a fake client. */
+export interface CreateProviderOptions {
+  clientFactory?: ImapClientFactory;
+}
+
+/**
+ * Build a provider for an account. `mock` is the default so an unconfigured or
+ * misconfigured account can never accidentally reach the network.
+ */
+export function createProvider(
+  config: EmailProviderConfig,
+  accountId: string,
+  identityId: string,
+  options: CreateProviderOptions = {}
+): EmailProvider {
   switch (config.type) {
     case 'mock':
       return new MockEmailProvider(config, accountId, identityId);
     case 'imap':
-      return new IMAPProvider(config, accountId, identityId);
+      return new ImapProvider(config, accountId, identityId, {
+        ...(options.clientFactory ? { clientFactory: options.clientFactory } : {}),
+      });
     case 'gmail':
       return new GmailProvider(config, accountId, identityId);
     case 'outlook':

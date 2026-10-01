@@ -1,12 +1,12 @@
-# ICON Email & Browser Lab — Project Status
+|# ICON Email & Browser Lab — Project Status
 
 **Updated**: October 1, 2026
 
 ---
 
-## Current Phase: Phase 6a COMPLETE ✅ · Phase 6b COMPLETE ✅ · Phase 6c Next 🔲
+## Current Phase: Phase 6a COMPLETE ✅ · Phase 6b COMPLETE ✅ · Phase 6c COMPLETE ✅
 
-Phase 6a implements the generic IMAP provider adapter using `imapflow` 2.1.2, plus database/provider foundation for credential isolation and health tracking. Phase 6b (Gmail OAuth2) is now fully implemented with OAuth flow, token management, and UI integration.
+Phase 6a implements the generic IMAP provider adapter using `imapflow` 2.1.2, plus database/provider foundation for credential isolation and health tracking. Phase 6b (Gmail OAuth2) and Phase 6c (Microsoft Graph OAuth2) are now fully implemented with server-authoritative OAuth transaction lifecycle.
 
 - ✅ Phase 1: Foundation (database, email, browser, automation packages)
 - ✅ Phase 2: Core Data Model (CRUD operations, seed data)
@@ -16,6 +16,8 @@ Phase 6a implements the generic IMAP provider adapter using `imapflow` 2.1.2, pl
 - ✅ Phase 5: Playwright Browser Isolation Testing (6/6 tests pass)
 - ✅ Phase 6 Research: Provider adapter architecture documented
 - ✅ **Phase 6a: IMAP Provider + Credential Isolation + Health Tracking**
+- ✅ **Phase 6b: Gmail OAuth2 Provider with PKCE**
+- ✅ **Phase 6c: Microsoft Graph/Outlook Provider with PKCE**
 
 ---
 
@@ -173,10 +175,26 @@ Current: Phase 6a implementation ready to commit
 - API: `/api/email/oauth/initiate`, `/api/email/oauth/callback`
 - Commits: `07e2454` (implementation), `b21824d` (security hardening)
 
-### Phase 6c: Outlook/Microsoft Graph Provider 🔲 NEXT
-- Direct Microsoft Graph REST API with OAuth2
-- Scopes: `Mail.Read` + `offline_access`
-- Handles refresh token rotation
+### Phase 6c: Outlook/Microsoft Graph Provider ✅ COMPLETE
+- Direct Microsoft Graph REST API with OAuth2 PKCE flow — DONE
+- Scope: `Mail.Read` + `User.Read` + `offline_access`
+- Server-authoritative transaction lifecycle (same as Gmail)
+- Token auto-refresh on expiry
+- Fake Microsoft Graph server for testing (zero network dependency)
+- **Security architecture:**
+  - Server holds pending transactions (in-memory Map, never browser)
+  - Cryptographically secure state values (64-char hex)
+  - State validated exactly once, consumed immediately on use
+  - 10-minute TTL with automatic cleanup of expired transactions
+  - Replay protection: consumed states return "Invalid or expired" error
+  - Redirect URI validated against `MICROSOFT_REDIRECT_URI` env var
+  - Client-supplied clientId/clientSecret/redirectUri IGNORED on init
+  - Identity match enforced between init and callback
+  - API response contains ONLY `{authorizationUrl, state}` — no secrets leaked
+- UI: "Connect Outlook (OAuth)" button in Inbox Manager
+- API: `/api/email/oauth/initiate` (with providerType='outlook'), `/api/email/oauth/callback`
+- Test coverage: 18 provider tests + 12 OAuth security tests = 30 Microsoft-specific tests
+- Commits: `0fda2b9` (Phase 6c implementation)
 
 ### Phase 7: Provider Marketplace
 - Multi-tenant deployment

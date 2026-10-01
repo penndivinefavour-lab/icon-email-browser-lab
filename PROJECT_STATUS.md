@@ -4,9 +4,9 @@
 
 ---
 
-## Current Phase: Phase 6a COMPLETE ✅ · Phase 6b Research Done 🔍
+## Current Phase: Phase 6a COMPLETE ✅ · Phase 6b COMPLETE ✅ · Phase 6c Next 🔲
 
-Phase 6a implements the generic IMAP provider adapter using `imapflow` 2.1.2, plus database/provider foundation for credential isolation and health tracking. Phase 6b (Gmail OAuth2) research is complete; implementation deferred.
+Phase 6a implements the generic IMAP provider adapter using `imapflow` 2.1.2, plus database/provider foundation for credential isolation and health tracking. Phase 6b (Gmail OAuth2) is now fully implemented with OAuth flow, token management, and UI integration.
 
 - ✅ Phase 1: Foundation (database, email, browser, automation packages)
 - ✅ Phase 2: Core Data Model (CRUD operations, seed data)
@@ -152,12 +152,18 @@ Current: Phase 6a implementation ready to commit
 
 ## Next Steps
 
-### Phase 6b: Gmail OAuth2 Provider
-- Direct REST API with OAuth2 PKCE flow
-- Scope: `https://www.googleapis.com/auth/gmail.readonly` (Restricted tier)
+### Phase 6b: Gmail OAuth2 Provider ✅ COMPLETE
+- Direct REST API with OAuth2 PKCE flow — DONE
+- Scope: `https://www.googleapis.com/auth/gmail.readonly` + `openid` + `userinfo.email`
 - No SDK dependencies — pure fetch() calls
+- Token auto-refresh on expiry
+- Fake Google server for testing (zero network dependency)
+- 21 new tests added, total 112 passing
+- UI: "Connect Gmail" button in Inbox Manager
+- API: `/api/email/oauth/initiate`, `/api/email/oauth/callback`
+- Commit: `07e2454`
 
-### Phase 6c: Outlook/Microsoft Graph Provider
+### Phase 6c: Outlook/Microsoft Graph Provider 🔲 NEXT
 - Direct Microsoft Graph REST API with OAuth2
 - Scopes: `Mail.Read` + `offline_access`
 - Handles refresh token rotation

@@ -152,16 +152,26 @@ Current: Phase 6a implementation ready to commit
 
 ## Next Steps
 
-### Phase 6b: Gmail OAuth2 Provider ✅ COMPLETE
+### Phase 6b: Gmail OAuth2 Provider ✅ COMPLETE (with security hardening)
 - Direct REST API with OAuth2 PKCE flow — DONE
 - Scope: `https://www.googleapis.com/auth/gmail.readonly` + `openid` + `userinfo.email`
 - No SDK dependencies — pure fetch() calls
 - Token auto-refresh on expiry
 - Fake Google server for testing (zero network dependency)
-- 21 new tests added, total 112 passing
-- UI: "Connect Gmail" button in Inbox Manager
+- **Security hardening (commit `b21824d`):**
+  - Server-authoritative pending transaction store (in-memory Map, never browser)
+  - State validated exactly once, consumed immediately on use
+  - 10-minute TTL with automatic cleanup of expired transactions
+  - Replay protection: consumed states return "Invalid or expired" error
+  - Redirect URI validated against `GOOGLE_REDIRECT_URI` env var
+  - Client-supplied clientId/clientSecret/redirectUri IGNORED on init
+  - Identity match enforced between init and callback
+  - API response contains ONLY `{authorizationUrl, state}` — no secrets leaked
+  - Frontend removed localStorage oauth_state/oauth_code_verifier storage
+  - 12 new OAuth security tests added (total 124 passing)
+- UI: "Connect Gmail (OAuth)" button in Inbox Manager
 - API: `/api/email/oauth/initiate`, `/api/email/oauth/callback`
-- Commit: `07e2454`
+- Commits: `07e2454` (implementation), `b21824d` (security hardening)
 
 ### Phase 6c: Outlook/Microsoft Graph Provider 🔲 NEXT
 - Direct Microsoft Graph REST API with OAuth2

@@ -30,6 +30,7 @@ export {
   EmailProviderError,
   classifyProviderError,
   scrubSecrets,
+  oauthUserFacingMessage,
   type EmailProviderErrorCode,
 } from './errors.js';
 
@@ -57,6 +58,30 @@ export {
   type ImapFetchedMessage,
 } from './imap-provider.js';
 
+// ── Gmail provider ───────────────────────────────────────────────────────
+export {
+  GmailProvider,
+  normalizeGmailMessage,
+  type GmailProviderConfig,
+  type GmailProviderOptions,
+  type TokenLoader,
+  type GmailHttpClient,
+} from './gmail-provider.js';
+
+// ── Fake test helpers ───────────────────────────────────────────────────
+export {
+  createFakeGoogleServer,
+  generateState,
+  generateCodeVerifier,
+  generateCodeChallenge,
+  buildAuthUrl,
+  type FakeTokenData,
+  type FakeServerOptions,
+} from './testing/fake-google-server.js';
+
+// ── Outlook provider placeholder ────────────────────────────────────────
+export { OutlookProvider } from './outlook-provider-placeholder.js';
+
 import {
   EmailProvider,
   type EmailMessage,
@@ -64,6 +89,8 @@ import {
   type MailboxInfo,
 } from './types.js';
 import { ImapProvider, type ImapClientFactory } from './imap-provider.js';
+import { GmailProvider, type TokenLoader } from './gmail-provider.js';
+import { OutlookProvider } from './outlook-provider-placeholder.js';
 
 /**
  * Mock provider. Used by default for development, seeded data, and every
@@ -194,68 +221,10 @@ export class MockEmailProvider extends EmailProvider {
   }
 }
 
-/**
- * Gmail adapter placeholder. Phase 6b. The OAuth2 consent flow and the REST
- * calls are deliberately not stubbed out to look functional.
- */
-export class GmailProvider extends EmailProvider {
-  private unavailable(): never {
-    throw new Error(
-      'The Gmail provider is not implemented yet. It arrives in Phase 6b; use the IMAP provider or the mock provider for now.'
-    );
-  }
-  async connect(): Promise<boolean> {
-    return this.unavailable();
-  }
-  async disconnect(): Promise<void> {
-    return this.unavailable();
-  }
-  async fetchMessages(): Promise<EmailMessage[]> {
-    return this.unavailable();
-  }
-  async searchMessages(): Promise<EmailMessage[]> {
-    return this.unavailable();
-  }
-  async markAsRead(): Promise<boolean> {
-    return this.unavailable();
-  }
-  async getUnreadCount(): Promise<number> {
-    return this.unavailable();
-  }
-}
-
-/**
- * Microsoft Graph adapter placeholder. Phase 6c.
- */
-export class OutlookProvider extends EmailProvider {
-  private unavailable(): never {
-    throw new Error(
-      'The Outlook provider is not implemented yet. It arrives in Phase 6c; use the IMAP provider or the mock provider for now.'
-    );
-  }
-  async connect(): Promise<boolean> {
-    return this.unavailable();
-  }
-  async disconnect(): Promise<void> {
-    return this.unavailable();
-  }
-  async fetchMessages(): Promise<EmailMessage[]> {
-    return this.unavailable();
-  }
-  async searchMessages(): Promise<EmailMessage[]> {
-    return this.unavailable();
-  }
-  async markAsRead(): Promise<boolean> {
-    return this.unavailable();
-  }
-  async getUnreadCount(): Promise<number> {
-    return this.unavailable();
-  }
-}
-
 /** Extra construction options, currently only used to inject a fake client. */
 export interface CreateProviderOptions {
   clientFactory?: ImapClientFactory;
+  tokenLoader?: TokenLoader;
 }
 
 /**
@@ -276,7 +245,7 @@ export function createProvider(
         ...(options.clientFactory ? { clientFactory: options.clientFactory } : {}),
       });
     case 'gmail':
-      return new GmailProvider(config, accountId, identityId);
+      return new GmailProvider(config as any, accountId, identityId, options.tokenLoader ?? (() => Promise.resolve(null)));
     case 'outlook':
       return new OutlookProvider(config, accountId, identityId);
     default:

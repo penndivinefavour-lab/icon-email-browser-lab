@@ -605,6 +605,14 @@ function App(): React.ReactElement {
     }
   }
 
+  async function disconnectAccount(accountId: string) {
+    // Remove credentials and reset health status
+    await fetch(`/api/email/accounts/${accountId}`, {
+      method: 'DELETE',
+    });
+    await loadAccounts();
+  }
+
   async function fetchAccountMessages(accountId: string) {
     setAccountBusy(true);
     setAccountError(null);
@@ -2093,6 +2101,20 @@ function App(): React.ReactElement {
                             >
                               {account.provider_type}
                             </span>
+                            {account.provider_type === 'gmail' && (
+                              <span
+                                style={{
+                                  fontSize: '11px',
+                                  padding: '2px 8px',
+                                  borderRadius: '4px',
+                                  background: 'rgba(239, 68, 68, 0.15)',
+                                  color: '#FCA5A5',
+                                  fontWeight: 600,
+                                }}
+                              >
+                                OAuth
+                              </span>
+                            )}
                             <span
                               style={{
                                 fontSize: '12px',
@@ -2114,12 +2136,12 @@ function App(): React.ReactElement {
                             </span>
                           </div>
                           <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.45)', marginTop: '4px' }}>
-                            {account.config?.user ?? account.config?.host ?? 'local mock account'}
+                            {account.provider_type === 'gmail' ? 'Gmail (OAuth2)' : account.config?.user ?? account.config?.host ?? 'local mock account'}
                             {account.config?.host ? ` · ${account.config.host}:${account.config.port ?? 993}` : ''}
                           </div>
                           <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)', marginTop: '3px' }}>
                             {/* Only a boolean and a mask are ever available here. */}
-                            {account.hasCredentials ? `Password stored (${account.maskedSecret})` : 'No credentials stored'}
+                            {account.hasCredentials ? 'Credentials stored' : 'No credentials stored'}
                             {health.lastCheckedAt ? ` · checked ${formatDate(health.lastCheckedAt)}` : ''}
                             {health.latencyMs != null ? ` · ${health.latencyMs}ms` : ''}
                             {health.unreadCount != null ? ` · ${health.unreadCount} unread` : ''}
@@ -2151,6 +2173,14 @@ function App(): React.ReactElement {
                           >
                             Fetch Messages
                           </button>
+                          {account.provider_type === 'gmail' && (
+                            <button
+                              onClick={() => disconnectAccount(account.id)}
+                              style={{ ...smallActionStyle, background: 'rgba(239, 68, 68, 0.15)', color: '#FCA5A5' }}
+                            >
+                              Disconnect
+                            </button>
+                          )}
                         </div>
                       </div>
                     );

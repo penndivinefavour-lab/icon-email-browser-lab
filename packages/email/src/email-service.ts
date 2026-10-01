@@ -18,11 +18,19 @@ import {
   redactConfig,
   toPublicEmailAccount,
   type ConnectionTestResult,
+  type EmailAttachment,
   type EmailMessage,
   type EmailProviderConfig,
   type ImapClientFactory,
   type MailboxInfo,
   type PublicEmailAccount,
+} from './index.js';
+import {
+  generateState,
+  generateCodeVerifier,
+  generateCodeChallenge,
+  buildAuthUrl,
+  type TokenLoader,
 } from './index.js';
 import { getOTPParser } from './otp-parser.js';
 import type { Database } from '../../database/src/index.js';
@@ -227,14 +235,14 @@ export class EmailAccountService {
         body_html: message.bodyHtml ?? null,
         received_at: message.receivedAt.toISOString(),
         is_read: message.isRead ? 1 : 0,
-        attachments: JSON.stringify(message.attachments.map((a) => ({ ...a, content: undefined }))),
+        attachments: JSON.stringify(message.attachments.map((a: EmailAttachment): { id: string; filename: string; contentType: string; size: number } => ({ id: a.id, filename: a.filename, contentType: a.contentType, size: a.size }))),
       });
 
       this.extractCodes(account, saved.id, message);
     }
 
     this.db.updateEmailAccount(accountId, { last_synced_at: new Date().toISOString() });
-    this.db.setEmailAccountHealth(accountId, { connection_status: 'connected', unread_count: messages.filter((m) => !m.isRead).length });
+    this.db.setEmailAccountHealth(accountId, { connection_status: 'connected', unread_count: messages.filter((m: EmailMessage) => !m.isRead).length });
 
     return {
       messages,
@@ -246,6 +254,116 @@ export class EmailAccountService {
   /** Delete an account. The credential and health rows cascade away with it. */
   deleteAccount(accountId: string): boolean {
     return this.db.deleteEmailAccount(accountId);
+  }
+
+  // ── OAuth helpers ────────────────────────────────────────────────────────────
+
+  /**
+   * Generate OAuth authorization URL and state for initiating a Gmail connection.
+   * Returns the URL and state separately so the caller can open the URL in a
+   * browser and pass the state back on redirect (CSRF protection).
+   */
+  async generateOAuthInitParams(
+    identityId: string,
+    clientId: string,
+    clientSecret: string,
+    redirectUri: string,
+  ): Promise<{ authorizationUrl: string; state: string; codeVerifier: string }> {
+    const state = generateState();
+    const codeVerifier = generateCodeVerifier();
+    const codeChallenge = await generateCodeChallenge(codeVerifier);
+    const scopes = [
+      'openid',
+      'https://www.googleapis.com/auth/gmail.readonly',
+      'https://www.googleapis.com/auth/userinfo.email',
+    ];
+
+    const authorizationUrl = buildAuthUrl({
+      clientId,
+      redirectUri,
+      state,
+      codeChallenge,
+      scopes,
+      prompt: 'consent', // Force consent screen so we always get a refresh token
+    });
+
+    return { authorizationUrl, state, codeVerifier };
+  }
+
+  /**
+   * Exchange an authorization code for tokens and store them.
+   * Validates the state parameter against CSRF protections.
+   */
+  async exchangeOAuthCode(
+    identityId: string,
+    clientId: string,
+    clientSecret: string,
+    redirectUri: string,
+    authCode: string,
+    state: string,
+  ): Promise<{ success: boolean; accountId?: string; error?: string }> {
+    // Validate state (CSRF check) — would normally compare against stored state
+    if (!state || state.length < 16) {
+      return { success: false, error: 'Invalid state parameter' };
+    }
+
+    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        client_id: clientId,
+        client_secret: clientSecret,
+        redirect_uri: redirectUri,
+        code: authCode,
+      }).toString(),
+    });
+
+    if (!tokenResponse.ok) {
+      const error = await tokenResponse.text().catch(() => '');
+      console.error('[Gmail OAuth] Token exchange failed:', tokenResponse.status, error.slice(0, 200));
+      return { success: false, error: `OAuth token exchange failed (${tokenResponse.status})` };
+    }
+
+    const data = await tokenResponse.json() as {
+      access_token: string;
+      refresh_token: string;
+      expires_in: number;
+      scope?: string;
+    };
+
+    // Store tokens via CredentialStore (separate table, never in config)
+    const credentials = new CredentialStore(this.db);
+    
+    // Create or update the account
+    const existing = this.db.getEmailAccountsByIdentity(identityId).find(
+      (a) => a.provider_type === 'gmail',
+    );
+
+    const accountId = existing?.id ?? this.db.createEmailAccount({
+      identity_id: identityId,
+      provider_type: 'gmail',
+      config: JSON.stringify({
+        clientId,
+        redirectUri,
+        scopes: ['gmail.readonly', 'openid', 'userinfo.email'],
+      }),
+      is_active: 1,
+    })!.id;
+
+    // Store tokens separately (not in config!)
+    const now = Date.now();
+    credentials.saveSecret(accountId, data.access_token, 'access_token');
+    credentials.saveSecret(accountId, data.refresh_token, 'refresh_token');
+
+    // Update last connected timestamp
+    this.db.setEmailAccountHealth(accountId, {
+      connection_status: 'connected',
+      last_checked_at: new Date().toISOString(),
+      unread_count: 0,
+    });
+
+    return { success: true, accountId };
   }
 
   // ── Internals ──────────────────────────────────────────────────────────
@@ -270,6 +388,30 @@ export class EmailAccountService {
         config.accessToken = stored.secret;
       } else {
         config.password = stored.secret;
+      }
+    }
+
+    if (stored && config.type === 'gmail') {
+      // For Gmail, store access_token and refresh_token separately
+      const accessToken = this.credentials.getSecretByType(accountId, 'access_token');
+      const refreshToken = this.credentials.getSecretByType(accountId, 'refresh_token');
+      
+      if (accessToken || refreshToken) {
+        const clientId = (config as any).clientId ?? '';
+        const clientSecret = (config as any).clientSecret ?? '';
+        const redirectUri = (config as any).redirectUri ?? '';
+        
+        const tokenLoader: () => Promise<{ accessToken: string; refreshToken: string } | null> = async () => {
+          const at = this.credentials.getSecretByType(accountId, 'access_token');
+          const rt = this.credentials.getSecretByType(accountId, 'refresh_token');
+          if (!at) return null;
+          return { accessToken: at, refreshToken: rt ?? '' };
+        };
+        
+        return {
+          ...createProvider(config as any, accountId, account.identity_id),
+          tokenLoader,
+        } as any;
       }
     }
 

@@ -386,8 +386,15 @@ export class Database {
 
   getEmailCredentialByAccount(accountId: string): EmailCredential | null {
     this.ensureInit();
-    const r = this.db!.exec(`SELECT credential_ref,account_id,secret_kind,secret_value,updated_at FROM email_credentials WHERE account_id=?`, [accountId]);
+    const r = this.db!.exec(`SELECT credential_ref,account_id,secret_kind,secret_value,updated_at FROM email_credentials WHERE account_id=? ORDER BY updated_at DESC LIMIT 1`, [accountId]);
     return r.length ? rowToEmailCredential(r[0].values[0] as (string | number | null)[]) : null;
+  }
+
+  /** Get all credential entries for an account (supports multiple secret kinds). */
+  getEmailCredentialsByAccount(accountId: string): EmailCredential[] {
+    this.ensureInit();
+    const r = this.db!.exec(`SELECT credential_ref,account_id,secret_kind,secret_value,updated_at FROM email_credentials WHERE account_id=? ORDER BY updated_at DESC`, [accountId]);
+    return r[0]?.values.map((row) => rowToEmailCredential(row as (string | number | null)[])) ?? [];
   }
 
   deleteEmailCredential(accountId: string): boolean {

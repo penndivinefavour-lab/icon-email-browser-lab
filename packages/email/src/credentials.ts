@@ -191,6 +191,25 @@ export class CredentialStore {
   deleteSecret(accountId: string): boolean {
     return this.db.deleteEmailCredential(accountId);
   }
+
+  /**
+   * Get a specific secret by its kind (e.g., 'access_token', 'refresh_token').
+   * Returns null if not found.
+   */
+  getSecretByType(accountId: string, secretKind: string): string | null {
+    const rows = this.db.getEmailCredentialsByAccount(accountId);
+    const row = rows.find((r) => r.secret_kind === secretKind);
+    return row?.secret_value ?? null;
+  }
+
+  /**
+   * Check if an account has a specific secret type.
+   */
+  hasSecretOfType(accountId: string, secretKind: string): boolean {
+    return this.db.getEmailCredentialsByAccount(accountId).some(
+      (r) => r.secret_kind === secretKind,
+    );
+  }
 }
 
 /**

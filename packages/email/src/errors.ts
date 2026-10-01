@@ -22,6 +22,11 @@ export type EmailProviderErrorCode =
   | 'ALREADY_CONNECTED'
   | 'DISCONNECT_FAILED'
   | 'PROTOCOL_ERROR'
+  | 'OAUTH_FAILED'
+  | 'OAUTH_STATE_MISMATCH'
+  | 'TOKEN_REFRESH_FAILED'
+  | 'RATE_LIMITED'
+  | 'ACCOUNT_REVOKED'
   | 'UNKNOWN';
 
 /** Substrings that indicate the failure class in raw upstream messages. */
@@ -101,6 +106,8 @@ const USER_ACTIONABLE = new Set<EmailProviderErrorCode>([
   'TLS_FAILED',
   'MAILBOX_NOT_FOUND',
   'NOT_CONNECTED',
+  'OAUTH_FAILED',
+  'ACCOUNT_REVOKED',
 ]);
 
 /**
@@ -193,5 +200,23 @@ function userFacingMessage(code: EmailProviderErrorCode): string {
       return 'The mail server returned an unexpected response.';
     default:
       return 'The mail provider returned an unexpected error.';
+  }
+}
+
+/** User-facing messages for OAuth and API errors. */
+export function oauthUserFacingMessage(code: string): string {
+  switch (code) {
+    case 'OAUTH_FAILED':
+      return 'Gmail authorization failed. Re-connect your account to continue.';
+    case 'OAUTH_STATE_MISMATCH':
+      return 'Invalid authorization state. Please try connecting again.';
+    case 'TOKEN_REFRESH_FAILED':
+      return 'Failed to refresh Gmail tokens. Re-connect your account.';
+    case 'RATE_LIMITED':
+      return 'Gmail API rate limit reached. Please wait a moment and try again.';
+    case 'ACCOUNT_REVOKED':
+      return 'Gmail access has been revoked. Re-authorize to continue.';
+    default:
+      return 'An unexpected authentication error occurred.';
   }
 }

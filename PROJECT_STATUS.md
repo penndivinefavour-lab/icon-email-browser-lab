@@ -4,9 +4,9 @@
 
 ---
 
-## Current Phase: Phase 6a COMPLETE ✅
+## Current Phase: Phase 6a COMPLETE ✅ · Phase 6b Research Done 🔍
 
-Phase 6a implements the generic IMAP provider adapter using `imapflow` 2.1.2, plus database/provider foundation for credential isolation and health tracking.
+Phase 6a implements the generic IMAP provider adapter using `imapflow` 2.1.2, plus database/provider foundation for credential isolation and health tracking. Phase 6b (Gmail OAuth2) research is complete; implementation deferred.
 
 - ✅ Phase 1: Foundation (database, email, browser, automation packages)
 - ✅ Phase 2: Core Data Model (CRUD operations, seed data)

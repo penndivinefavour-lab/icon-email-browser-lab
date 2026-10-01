@@ -258,17 +258,29 @@ export class EmailAccountService {
 
   // ── OAuth helpers ────────────────────────────────────────────────────────────
 
+  /** Maximum lifetime for a pending OAuth transaction (10 minutes). */
+  private static readonly OAUTH_TRANSACTION_TTL_MS = 10 * 60 * 1000;
+
+  /** In-memory store of pending OAuth transactions. Keyed by state string. */
+  private readonly oauthTransactions = new Map<string, {
+    identityId: string;
+    codeVerifier: string;
+    createdAtMs: number;
+  }>();
+
   /**
-   * Generate OAuth authorization URL and state for initiating a Gmail connection.
-   * Returns the URL and state separately so the caller can open the URL in a
-   * browser and pass the state back on redirect (CSRF protection).
+   * Generate an OAuth authorization URL and persist the transaction server-side.
+   * Returns ONLY the URL and state — never the PKCE verifier or any secret.
    */
-  async generateOAuthInitParams(
-    identityId: string,
-    clientId: string,
-    clientSecret: string,
-    redirectUri: string,
-  ): Promise<{ authorizationUrl: string; state: string; codeVerifier: string }> {
+  async generateOAuthInitParams(identityId: string): Promise<{ authorizationUrl: string; state: string }> {
+    const clientId = process.env.GOOGLE_CLIENT_ID ?? '';
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET ?? '';
+    const redirectUri = process.env.GOOGLE_REDIRECT_URI ?? 'http://localhost:3000/auth/google/callback';
+
+    if (!clientId) throw new Error('GOOGLE_CLIENT_ID is not configured');
+    if (!clientSecret) throw new Error('GOOGLE_CLIENT_SECRET is not configured');
+    if (!redirectUri) throw new Error('GOOGLE_REDIRECT_URI is not configured');
+
     const state = generateState();
     const codeVerifier = generateCodeVerifier();
     const codeChallenge = await generateCodeChallenge(codeVerifier);
@@ -284,86 +296,125 @@ export class EmailAccountService {
       state,
       codeChallenge,
       scopes,
-      prompt: 'consent', // Force consent screen so we always get a refresh token
+      prompt: 'consent',
     });
 
-    return { authorizationUrl, state, codeVerifier };
+    // Store the pending transaction server-side (NEVER sent to browser)
+    this.oauthTransactions.set(state, {
+      identityId,
+      codeVerifier,
+      createdAtMs: Date.now(),
+    });
+
+    return { authorizationUrl, state };
   }
 
   /**
-   * Exchange an authorization code for tokens and store them.
-   * Validates the state parameter against CSRF protections.
+   * Exchange an authorization code for tokens.
+   * Validates state against the server-held pending transaction exactly once.
    */
   async exchangeOAuthCode(
     identityId: string,
-    clientId: string,
-    clientSecret: string,
     redirectUri: string,
     authCode: string,
     state: string,
   ): Promise<{ success: boolean; accountId?: string; error?: string }> {
-    // Validate state (CSRF check) — would normally compare against stored state
-    if (!state || state.length < 16) {
-      return { success: false, error: 'Invalid state parameter' };
+    // Look up the server-held transaction (never trust client-supplied state alone)
+    const transaction = this.consumeOAuthTransaction(state);
+    if (!transaction) {
+      return { success: false, error: 'Invalid or expired authorization state' };
     }
 
-    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'authorization_code',
-        client_id: clientId,
-        client_secret: clientSecret,
-        redirect_uri: redirectUri,
-        code: authCode,
-      }).toString(),
-    });
-
-    if (!tokenResponse.ok) {
-      const error = await tokenResponse.text().catch(() => '');
-      console.error('[Gmail OAuth] Token exchange failed:', tokenResponse.status, error.slice(0, 200));
-      return { success: false, error: `OAuth token exchange failed (${tokenResponse.status})` };
+    // Validate identity matches
+    if (transaction.identityId !== identityId) {
+      return { success: false, error: 'Identity mismatch' };
     }
 
-    const data = await tokenResponse.json() as {
-      access_token: string;
-      refresh_token: string;
-      expires_in: number;
-      scope?: string;
-    };
+    // Validate redirect URI against the server-configured value
+    const expectedRedirect = process.env.GOOGLE_REDIRECT_URI ?? 'http://localhost:3000/auth/google/callback';
+    if (redirectUri !== expectedRedirect) {
+      return { success: false, error: 'Redirect URI mismatch' };
+    }
 
-    // Store tokens via CredentialStore (separate table, never in config)
-    const credentials = new CredentialStore(this.db);
-    
-    // Create or update the account
-    const existing = this.db.getEmailAccountsByIdentity(identityId).find(
-      (a) => a.provider_type === 'gmail',
-    );
+    const clientId = process.env.GOOGLE_CLIENT_ID ?? '';
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET ?? '';
 
-    const accountId = existing?.id ?? this.db.createEmailAccount({
-      identity_id: identityId,
-      provider_type: 'gmail',
-      config: JSON.stringify({
-        clientId,
-        redirectUri,
-        scopes: ['gmail.readonly', 'openid', 'userinfo.email'],
-      }),
-      is_active: 1,
-    })!.id;
+    try {
+      const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          client_id: clientId,
+          client_secret: clientSecret,
+          redirect_uri: expectedRedirect,
+          code: authCode,
+          code_verifier: transaction.codeVerifier,
+        }).toString(),
+      });
 
-    // Store tokens separately (not in config!)
-    const now = Date.now();
-    credentials.saveSecret(accountId, data.access_token, 'access_token');
-    credentials.saveSecret(accountId, data.refresh_token, 'refresh_token');
+      if (!tokenResponse.ok) {
+        const error = await tokenResponse.text().catch(() => '');
+        console.error('[Gmail OAuth] Token exchange failed:', tokenResponse.status, error.slice(0, 200));
+        return { success: false, error: `OAuth token exchange failed (${tokenResponse.status})` };
+      }
 
-    // Update last connected timestamp
-    this.db.setEmailAccountHealth(accountId, {
-      connection_status: 'connected',
-      last_checked_at: new Date().toISOString(),
-      unread_count: 0,
-    });
+      const data = await tokenResponse.json() as {
+        access_token: string;
+        refresh_token: string;
+        expires_in: number;
+        scope?: string;
+      };
 
-    return { success: true, accountId };
+      // Store tokens via CredentialStore (separate table, never in config)
+      const existing = this.db.getEmailAccountsByIdentity(identityId).find(
+        (a) => a.provider_type === 'gmail',
+      );
+
+      const accountId = existing?.id ?? this.db.createEmailAccount({
+        identity_id: identityId,
+        provider_type: 'gmail',
+        config: JSON.stringify({
+          scopes: ['gmail.readonly', 'openid', 'userinfo.email'],
+        }),
+        is_active: 1,
+      })!.id;
+
+      // Store tokens separately (not in config!)
+      this.credentials.saveSecret(accountId, data.access_token, 'access_token');
+      this.credentials.saveSecret(accountId, data.refresh_token, 'refresh_token');
+
+      // Update last connected timestamp
+      this.db.setEmailAccountHealth(accountId, {
+        connection_status: 'connected',
+        last_checked_at: new Date().toISOString(),
+        unread_count: 0,
+      });
+
+      return { success: true, accountId };
+    } catch (err) {
+      console.error('[Gmail OAuth] Unexpected error:', err);
+      return { success: false, error: 'OAuth exchange failed' };
+    }
+  }
+
+  /**
+   * Consume a pending OAuth transaction exactly once.
+   * Returns null if the transaction doesn't exist, is expired, or was already consumed.
+   */
+  private consumeOAuthTransaction(state: string): { identityId: string; codeVerifier: string } | null {
+    const transaction = this.oauthTransactions.get(state);
+    if (!transaction) return null;
+
+    // Check expiration (10-minute TTL)
+    if (Date.now() - transaction.createdAtMs > EmailAccountService.OAUTH_TRANSACTION_TTL_MS) {
+      this.oauthTransactions.delete(state);
+      return null;
+    }
+
+    // Remove to ensure single-use (prevent replay)
+    this.oauthTransactions.delete(state);
+    return transaction;
   }
 
   // ── Internals ──────────────────────────────────────────────────────────

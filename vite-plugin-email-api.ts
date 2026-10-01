@@ -199,15 +199,11 @@ export function emailProviderApi(): Plugin {
             readJson(req)
               .then((body) => {
                 const identityId = String(body.identityId ?? '');
-                const clientId = String(body.clientId ?? process.env.GOOGLE_CLIENT_ID ?? '');
-                const clientSecret = String(body.clientSecret ?? process.env.GOOGLE_CLIENT_SECRET ?? '');
-                const redirectUri = String(body.redirectUri ?? process.env.GOOGLE_REDIRECT_URI ?? 'http://localhost:3000/auth/google/callback');
+                // Client-supplied clientId, clientSecret, redirectUri are IGNORED.
+                // Server reads these from environment only.
                 if (!identityId) return send(res, 400, { error: 'identityId is required' });
-                if (!clientId) return send(res, 400, { error: 'clientId is required' });
-                if (!clientSecret) return send(res, 400, { error: 'clientSecret is required' });
-                if (!redirectUri) return send(res, 400, { error: 'redirectUri is required' });
                 try {
-                  const result = svc.generateOAuthInitParams(identityId, clientId, clientSecret, redirectUri);
+                  const result = svc.generateOAuthInitParams(identityId);
                   return send(res, 200, result);
                 } catch (err: unknown) {
                   const e = err as Error & { code?: string };
@@ -223,25 +219,24 @@ export function emailProviderApi(): Plugin {
             const state = url.searchParams.get('state');
             const error = url.searchParams.get('error');
             const identityId = url.searchParams.get('identityId') ?? '';
-            const clientId = url.searchParams.get('clientId') ?? '';
             const redirectUri = url.searchParams.get('redirectUri') ?? '';
 
             if (error) {
-              return send(res, 400, { error: `OAuth denied: ${error}`, redirectUri });
+              return send(res, 400, { error: `OAuth denied: ${error}` });
             }
             if (!authCode || !state) {
-              return send(res, 400, { error: 'Missing code or state parameter', redirectUri });
+              return send(res, 400, { error: 'Missing code or state parameter' });
             }
-            if (!identityId) return send(res, 400, { error: 'identityId is required', redirectUri });
-            if (!clientId || !redirectUri) return send(res, 400, { error: 'Missing OAuth params', redirectUri });
+            if (!identityId) return send(res, 400, { error: 'identityId is required' });
+            if (!redirectUri) return send(res, 400, { error: 'redirectUri is required' });
 
-            // State validation (CSRF protection)
+            // State validation (CSRF protection) — also validated server-side in consumeOAuthTransaction
             const expectedState = req.headers['x-oauth-state'] as string | undefined;
             if (expectedState !== state) {
-              return send(res, 401, { error: 'Invalid state parameter (possible CSRF)', redirectUri });
+              return send(res, 401, { error: 'Invalid state parameter (possible CSRF)' });
             }
 
-            svc.exchangeOAuthCode(identityId, clientId, '', redirectUri, authCode, state)
+            svc.exchangeOAuthCode(identityId, redirectUri, authCode, state)
               .then((result) => send(res, result.success ? 200 : 400, result))
               .catch((err: Error & { code?: string }) =>
                 send(res, statusForError(err.code), { error: err.message, code: err.code ?? 'UNKNOWN' })

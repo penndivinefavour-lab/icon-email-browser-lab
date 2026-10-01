@@ -2038,6 +2038,42 @@ function App(): React.ReactElement {
                   <IconPlus className="w-4 h-4" />
                   Add Email Account
                 </button>
+                <button
+                  onClick={async () => {
+                    const res = await fetch('/api/email/oauth/initiate', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ identityId: identities[0]?.id ?? '' }),
+                    });
+                    if (!res.ok) {
+                      console.error('Failed to initiate Gmail OAuth');
+                      return;
+                    }
+                    const data = await res.json();
+                    // Open authorization URL in new tab
+                    window.open(data.authorizationUrl, '_blank');
+                    // State is stored server-side only — no localStorage needed
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '8px 14px',
+                    background: 'rgba(239, 68, 68, 0.12)',
+                    border: '1px solid rgba(239, 68, 68, 0.25)',
+                    borderRadius: '8px',
+                    fontFamily: "'Poppins', sans-serif",
+                    fontSize: '13px',
+                    fontWeight: 500,
+                    color: '#FCA5A5',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93v2.84h3.71c-.87-2.6-1.08-4.53-1.08-6.78z M12 5.38c1.62 0 3.06.56 4.21 1.64l-3.57 3.57c-.98-.66-2.23-1.06-3.71-1.06-2.86 0-5.29 1.93-6.16 4.53l-3.71-3.57c.87-2.6 2.59-4.53 4.77-4.53 1.48 0 2.83.45 3.91 1.22L12 5.38z"/>
+                  </svg>
+                  Connect Gmail (OAuth)
+                </button>
               </div>
 
               {/* Provider accounts: status, connection test, fetch */}

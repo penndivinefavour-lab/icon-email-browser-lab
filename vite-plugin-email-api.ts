@@ -199,11 +199,17 @@ export function emailProviderApi(): Plugin {
             readJson(req)
               .then((body) => {
                 const identityId = String(body.identityId ?? '');
+                const providerType = String(body.providerType ?? 'gmail');
                 // Client-supplied clientId, clientSecret, redirectUri are IGNORED.
                 // Server reads these from environment only.
                 if (!identityId) return send(res, 400, { error: 'identityId is required' });
                 try {
-                  const result = svc.generateOAuthInitParams(identityId);
+                  let result;
+                  if (providerType === 'outlook' || providerType === 'microsoft') {
+                    result = svc.generateMicrosoftOAuthInitParams(identityId);
+                  } else {
+                    result = svc.generateOAuthInitParams(identityId);
+                  }
                   return send(res, 200, result);
                 } catch (err: unknown) {
                   const e = err as Error & { code?: string };
@@ -220,6 +226,7 @@ export function emailProviderApi(): Plugin {
             const error = url.searchParams.get('error');
             const identityId = url.searchParams.get('identityId') ?? '';
             const redirectUri = url.searchParams.get('redirectUri') ?? '';
+            const providerType = url.searchParams.get('provider') ?? 'gmail';
 
             if (error) {
               return send(res, 400, { error: `OAuth denied: ${error}` });
@@ -230,17 +237,27 @@ export function emailProviderApi(): Plugin {
             if (!identityId) return send(res, 400, { error: 'identityId is required' });
             if (!redirectUri) return send(res, 400, { error: 'redirectUri is required' });
 
-            // State validation (CSRF protection) — also validated server-side in consumeOAuthTransaction
+            // State validation (CSRF protection)
             const expectedState = req.headers['x-oauth-state'] as string | undefined;
             if (expectedState !== state) {
               return send(res, 401, { error: 'Invalid state parameter (possible CSRF)' });
             }
 
-            svc.exchangeOAuthCode(identityId, redirectUri, authCode, state)
-              .then((result) => send(res, result.success ? 200 : 400, result))
-              .catch((err: Error & { code?: string }) =>
-                send(res, statusForError(err.code), { error: err.message, code: err.code ?? 'UNKNOWN' })
-              );
+            // Route to appropriate provider's exchange handler
+            if (providerType === 'outlook' || providerType === 'microsoft') {
+              svc.exchangeMicrosoftOAuthCode(identityId, redirectUri, authCode, state)
+                .then((result) => send(res, result.success ? 200 : 400, result))
+                .catch((err: Error & { code?: string }) =>
+                  send(res, statusForError(err.code), { error: err.message, code: err.code ?? 'UNKNOWN' })
+                );
+            } else {
+              // Default to Gmail handler
+              svc.exchangeOAuthCode(identityId, redirectUri, authCode, state)
+                .then((result) => send(res, result.success ? 200 : 400, result))
+                .catch((err: Error & { code?: string }) =>
+                  send(res, statusForError(err.code), { error: err.message, code: err.code ?? 'UNKNOWN' })
+                );
+            }
             return;
           }
 

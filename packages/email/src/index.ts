@@ -68,6 +68,15 @@ export {
   type GmailHttpClient,
 } from './gmail-provider.js';
 
+// ── Microsoft Graph provider ─────────────────────────────────────────────
+export {
+  MicrosoftGraphProvider,
+  normalizeGmailMessage as normalizeMicrosoftMessage,
+  type MicrosoftGraphProviderConfig,
+  type MicrosoftGraphProviderOptions,
+  type MicrosoftGraphHttpClient,
+} from './microsoft-graph-provider.js';
+
 // ── Fake test helpers ───────────────────────────────────────────────────
 export {
   createFakeGoogleServer,

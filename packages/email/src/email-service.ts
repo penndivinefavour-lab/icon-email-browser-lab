@@ -417,6 +417,131 @@ export class EmailAccountService {
     return transaction;
   }
 
+  // ── Microsoft Graph OAuth helpers ───────────────────────────────────────────
+
+  /**
+   * Generate an OAuth authorization URL for Microsoft Graph and persist the transaction server-side.
+   * Returns ONLY the URL and state — never the PKCE verifier or any secret.
+   */
+  async generateMicrosoftOAuthInitParams(identityId: string): Promise<{ authorizationUrl: string; state: string }> {
+    const clientId = process.env.MICROSOFT_CLIENT_ID ?? '';
+    const clientSecret = process.env.MICROSOFT_CLIENT_SECRET ?? '';
+    const redirectUri = process.env.MICROSOFT_REDIRECT_URI ?? 'http://localhost:3000/auth/microsoft/callback';
+
+    if (!clientId) throw new Error('MICROSOFT_CLIENT_ID is not configured');
+    if (!clientSecret) throw new Error('MICROSOFT_CLIENT_SECRET is not configured');
+    if (!redirectUri) throw new Error('MICROSOFT_REDIRECT_URI is not configured');
+
+    const state = generateState();
+    const codeVerifier = generateCodeVerifier();
+    const codeChallenge = await generateCodeChallenge(codeVerifier);
+    const scopes = ['Mail.Read', 'User.Read', 'offline_access'];
+
+    const authorizationUrl = `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?${new URLSearchParams({
+      client_id: clientId,
+      response_type: 'code',
+      redirect_uri: redirectUri,
+      scope: scopes.join(' '),
+      response_mode: 'query',
+      state,
+      code_challenge: codeChallenge,
+      code_challenge_method: 'S256',
+    }).toString()}`;
+
+    // Store the pending transaction server-side (NEVER sent to browser)
+    this.oauthTransactions.set(state, {
+      identityId,
+      codeVerifier,
+      createdAtMs: Date.now(),
+    });
+
+    return { authorizationUrl, state };
+  }
+
+  /**
+   * Exchange a Microsoft OAuth authorization code for tokens.
+   */
+  async exchangeMicrosoftOAuthCode(
+    identityId: string,
+    redirectUri: string,
+    authCode: string,
+    state: string,
+  ): Promise<{ success: boolean; accountId?: string; error?: string }> {
+    const transaction = this.consumeOAuthTransaction(state);
+    if (!transaction) {
+      return { success: false, error: 'Invalid or expired authorization state' };
+    }
+
+    if (transaction.identityId !== identityId) {
+      return { success: false, error: 'Identity mismatch' };
+    }
+
+    const expectedRedirect = process.env.MICROSOFT_REDIRECT_URI ?? 'http://localhost:3000/auth/microsoft/callback';
+    if (redirectUri !== expectedRedirect) {
+      return { success: false, error: 'Redirect URI mismatch' };
+    }
+
+    const clientId = process.env.MICROSOFT_CLIENT_ID ?? '';
+    const clientSecret = process.env.MICROSOFT_CLIENT_SECRET ?? '';
+
+    try {
+      const tokenResponse = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          client_id: clientId,
+          client_secret: clientSecret,
+          redirect_uri: expectedRedirect,
+          code: authCode,
+          code_verifier: transaction.codeVerifier,
+        }).toString(),
+      });
+
+      if (!tokenResponse.ok) {
+        const error = await tokenResponse.text().catch(() => '');
+        console.error('[Microsoft OAuth] Token exchange failed:', tokenResponse.status, error.slice(0, 200));
+        return { success: false, error: `Microsoft OAuth token exchange failed (${tokenResponse.status})` };
+      }
+
+      const data = await tokenResponse.json() as {
+        access_token: string;
+        refresh_token: string;
+        expires_in: number;
+        scope?: string;
+      };
+
+      // Create or update account
+      const existing = this.db.getEmailAccountsByIdentity(identityId).find(
+        (a) => a.provider_type === 'outlook',
+      );
+
+      const accountId = existing?.id ?? this.db.createEmailAccount({
+        identity_id: identityId,
+        provider_type: 'outlook',
+        config: JSON.stringify({
+          scopes: ['Mail.Read', 'User.Read', 'offline_access'],
+        }),
+        is_active: 1,
+      })!.id;
+
+      // Store tokens
+      this.credentials.saveSecret(accountId, data.access_token, 'access_token');
+      this.credentials.saveSecret(accountId, data.refresh_token, 'refresh_token');
+
+      this.db.setEmailAccountHealth(accountId, {
+        connection_status: 'connected',
+        last_checked_at: new Date().toISOString(),
+        unread_count: 0,
+      });
+
+      return { success: true, accountId };
+    } catch (err) {
+      console.error('[Microsoft OAuth] Unexpected error:', err);
+      return { success: false, error: 'Microsoft OAuth exchange failed' };
+    }
+  }
+
   // ── Internals ──────────────────────────────────────────────────────────
 
   /**
@@ -451,6 +576,29 @@ export class EmailAccountService {
         const clientId = (config as any).clientId ?? '';
         const clientSecret = (config as any).clientSecret ?? '';
         const redirectUri = (config as any).redirectUri ?? '';
+        
+        const tokenLoader: () => Promise<{ accessToken: string; refreshToken: string } | null> = async () => {
+          const at = this.credentials.getSecretByType(accountId, 'access_token');
+          const rt = this.credentials.getSecretByType(accountId, 'refresh_token');
+          if (!at) return null;
+          return { accessToken: at, refreshToken: rt ?? '' };
+        };
+        
+        return {
+          ...createProvider(config as any, accountId, account.identity_id),
+          tokenLoader,
+        } as any;
+      }
+    }
+
+    if (stored && config.type === 'outlook') {
+      // For Outlook/Microsoft Graph, store access_token and refresh_token separately
+      const accessToken = this.credentials.getSecretByType(accountId, 'access_token');
+      const refreshToken = this.credentials.getSecretByType(accountId, 'refresh_token');
+      
+      if (accessToken || refreshToken) {
+        const clientId = (config as any).clientId ?? '';
+        const clientSecret = (config as any).clientSecret ?? '';
         
         const tokenLoader: () => Promise<{ accessToken: string; refreshToken: string } | null> = async () => {
           const at = this.credentials.getSecretByType(accountId, 'access_token');

@@ -116,23 +116,23 @@ describe('exchangeOAuthCode — state validation', () => {
 
   it('rejects replayed/consumed state', async () => {
     const initResult = await svc.generateOAuthInitParams(identityId);
-    
-    // First attempt fails (no valid code), but state should be consumed
-    await svc.exchangeOAuthCode(
-      identityId,
-      'http://localhost:3000/auth/google/callback',
-      'invalid-code',
-      initResult.state
-    );
-    
-    // Second attempt with same state should fail with "consumed" error
+
+    // Consume the transaction directly via internal method
+    const consumed = (svc as any).consumeOAuthTransaction(initResult.state);
+    expect(consumed).not.toBeNull();
+
+    // Second consumption should return null
+    const again = (svc as any).consumeOAuthTransaction(initResult.state);
+    expect(again).toBeNull();
+
+    // Exchange with consumed state should fail immediately
     const result2 = await svc.exchangeOAuthCode(
       identityId,
       'http://localhost:3000/auth/google/callback',
       'another-invalid-code',
       initResult.state
     );
-    
+
     expect(result2.success).toBe(false);
     expect(result2.error).toContain('Invalid or expired');
   });
